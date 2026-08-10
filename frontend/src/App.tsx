@@ -17,24 +17,14 @@ import Journal from './pages/Journal'
 import SystemHealth from './pages/SystemHealth'
 import Correlations from './pages/Correlations'
 import Signals from './pages/Signals'
+import LiveMarket from './pages/LiveMarket'
+import AlphaScanner from './pages/AlphaScanner'
+import Reports from './pages/Reports'
+import Settings from './pages/Settings'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem('token')
   return token ? <>{children}</> : <Navigate to="/login" replace />
-}
-
-function Placeholder({ title }: { title: string }) {
-  return (
-    <div className="panel">
-      <div className="panel-header">
-        <span className="panel-title">{title}</span>
-      </div>
-      <p className="muted">Module ready for next iteration.</p>
-      <p className="muted mt-8" style={{ fontSize: 11 }}>
-        Research & simulation only. Not financial advice.
-      </p>
-    </div>
-  )
 }
 
 export default function App() {
@@ -46,12 +36,12 @@ export default function App() {
 
       <Route element={<PrivateRoute><Layout /></PrivateRoute>}>
         <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/crypto" element={<Placeholder title="Crypto Markets" />} />
-        <Route path="/stocks" element={<Placeholder title="Stocks" />} />
-        <Route path="/etfs" element={<Placeholder title="ETFs" />} />
-        <Route path="/macro" element={<Placeholder title="Macro / Forex" />} />
+        <Route path="/crypto" element={<LiveMarket market="crypto" />} />
+        <Route path="/stocks" element={<LiveMarket market="stock" />} />
+        <Route path="/etfs" element={<LiveMarket market="etf" />} />
+        <Route path="/macro" element={<LiveMarket market="macro" />} />
         <Route path="/watchlist" element={<Watchlist />} />
-        <Route path="/alpha" element={<Placeholder title="Alpha Scanner" />} />
+        <Route path="/alpha" element={<AlphaScanner />} />
         <Route path="/correlations" element={<Correlations />} />
         <Route path="/signals" element={<Signals />} />
         <Route path="/ai-council" element={<AICouncil />} />
@@ -62,10 +52,10 @@ export default function App() {
         <Route path="/portfolio" element={<Portfolio />} />
         <Route path="/risk" element={<Risk />} />
         <Route path="/journal" element={<Journal />} />
-        <Route path="/reports" element={<Placeholder title="Reports" />} />
+        <Route path="/reports" element={<Reports />} />
         <Route path="/pricing" element={<Pricing />} />
         <Route path="/health" element={<SystemHealth />} />
-        <Route path="/settings" element={<Placeholder title="Settings" />} />
+        <Route path="/settings" element={<Settings />} />
         <Route path="/asset/:symbol" element={<AssetDetail />} />
       </Route>
     </Routes>

@@ -1,10 +1,12 @@
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, CandlestickChart, Eye, Zap, Crosshair,
   FlaskConical, LineChart, FileText, Briefcase, Shield,
   Brain, BookOpen, BarChart3, CreditCard, Activity, Settings, Target,
-  LogOut
+  LogOut, Search
 } from 'lucide-react'
+import { getOverview } from '../services/api'
 
 const nav = [
   { section: 'Markets', items: [
@@ -40,6 +42,27 @@ const nav = [
 
 export default function Layout() {
   const navigate = useNavigate()
+  const [regime, setRegime] = useState<string>('mixed')
+  const [confidence, setConfidence] = useState<number | null>(null)
+  const [query, setQuery] = useState('')
+
+  useEffect(() => {
+    getOverview()
+      .then(r => {
+        setRegime(r.data?.regime || 'mixed')
+        setConfidence(r.data?.regime_confidence ?? null)
+      })
+      .catch(() => {})
+  }, [])
+
+  const onSearch = (e: React.FormEvent) => {
+    e.preventDefault()
+    const sym = query.trim().toUpperCase()
+    if (!sym) return
+    navigate(`/asset/${sym}?class=crypto`)
+    setQuery('')
+  }
+
   const logout = () => {
     localStorage.removeItem('token')
     navigate('/login')
@@ -76,11 +99,18 @@ export default function Layout() {
       <div className="main">
         <header className="topbar">
           <div className="flex gap-12" style={{ alignItems: 'center' }}>
-            <input
-              placeholder="Search assets…"
-              style={{ width: 220, padding: '5px 10px', fontSize: 12 }}
-            />
-            <span className="badge badge-amber">Regime: Loading…</span>
+            <form onSubmit={onSearch} className="flex gap-4" style={{ alignItems: 'center' }}>
+              <Search size={13} className="muted" />
+              <input
+                placeholder="Search assets (e.g. BTC, NVDA)…"
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                style={{ width: 220, padding: '5px 10px', fontSize: 12 }}
+              />
+            </form>
+            <span className="badge badge-amber">
+              Regime: {regime.replace(/-/g, ' ')}{confidence != null ? ` (${confidence.toFixed(0)}%)` : ''}
+            </span>
           </div>
           <div className="flex gap-8" style={{ alignItems: 'center' }}>
             <span className="badge badge-green">System OK</span>

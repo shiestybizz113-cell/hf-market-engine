@@ -83,6 +83,10 @@ export const getBillingMe = () => api.get('/billing/me')
 export const getBillingStatus = () => api.get('/billing/status')
 export const createCheckout = (plan_id: string) => api.post('/billing/checkout', { plan_id })
 export const devUpgrade = (plan_id: string) => api.post('/billing/dev-upgrade', { plan_id })
+export const devDowngrade = (plan_id: string) => api.post('/billing/dev-downgrade', { plan_id })
+
+// Journal
+export const getJournal = () => api.get('/journal')
 
 // Execution (Phase 1 paper simulation)
 export const getExecutionAlgos = () => api.get('/execution/algos')
