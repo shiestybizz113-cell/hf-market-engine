@@ -15,6 +15,8 @@ import ExecutionResearch from './pages/ExecutionResearch'
 import Portfolio from './pages/Portfolio'
 import Journal from './pages/Journal'
 import SystemHealth from './pages/SystemHealth'
+import Correlations from './pages/Correlations'
+import Signals from './pages/Signals'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem('token')
@@ -50,8 +52,8 @@ export default function App() {
         <Route path="/macro" element={<Placeholder title="Macro / Forex" />} />
         <Route path="/watchlist" element={<Watchlist />} />
         <Route path="/alpha" element={<Placeholder title="Alpha Scanner" />} />
-        <Route path="/correlations" element={<Placeholder title="Correlation Radar" />} />
-        <Route path="/signals" element={<Placeholder title="AI Signal Engine" />} />
+        <Route path="/correlations" element={<Correlations />} />
+        <Route path="/signals" element={<Signals />} />
         <Route path="/ai-council" element={<AICouncil />} />
         <Route path="/execution" element={<ExecutionResearch />} />
         <Route path="/strategies" element={<Strategies />} />
