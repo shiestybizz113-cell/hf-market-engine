@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "hf-market-engine"
     ENVIRONMENT: str = "development"
     SECRET_KEY: str = "dev-secret-change-in-production"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24h
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
     ALGORITHM: str = "HS256"
 
     MONGODB_URL: str = "mongodb://localhost:27017"
@@ -24,12 +24,21 @@ class Settings(BaseSettings):
 
     REDIS_URL: str = "redis://localhost:6379"
 
-    # Pricing (display only – billing layer ready)
     PLAN_PRO_PRICE: int = 59
     PLAN_ADVANCED_PRICE: int = 199
     PLAN_TEAM_PRICE: int = 699
     PLAN_WHITELABEL_SETUP: int = 5000
     PLAN_WHITELABEL_MONTHLY: int = 1499
+
+    # Stripe — use sk_test_... + test price IDs for Test mode
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_PRICE_PRO: str = ""
+    STRIPE_PRICE_ADVANCED: str = ""
+    STRIPE_PRICE_TEAM: str = ""
+    STRIPE_PRICE_WHITELABEL: str = ""
+    STRIPE_SUCCESS_URL: str = "http://localhost:5173/pricing?upgraded=1"
+    STRIPE_CANCEL_URL: str = "http://localhost:5173/pricing?canceled=1"
 
     class Config:
         env_file = ".env"
