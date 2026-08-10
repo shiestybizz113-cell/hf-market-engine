@@ -6,7 +6,8 @@ Test mode:
   Webhook: stripe listen --forward-to localhost:8000/api/billing/webhook
 
 Dev without Stripe:
-  POST /api/billing/dev-upgrade (disabled when ENVIRONMENT=production)
+  POST /api/billing/dev-upgrade  (disabled when ENVIRONMENT=production)
+  POST /api/billing/dev-downgrade
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
@@ -15,7 +16,7 @@ from datetime import datetime, timezone
 from app.api.auth import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.plans import catalog_public
+from app.core.plans import catalog_public, PLAN_CATALOG, FEATURE_MIN_PLAN, has_feature
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -56,6 +57,21 @@ def _get_stripe():
         raise HTTPException(503, "stripe package not installed — pip install stripe")
 
 
+def _entitlement_summary(user: dict) -> dict:
+    plan = user.get("plan", "free")
+    meta = next((p for p in PLAN_CATALOG if p["id"] == plan), PLAN_CATALOG[0])
+    enabled = [f for f in FEATURE_MIN_PLAN if has_feature(plan, f)]
+    return {
+        "plan": plan,
+        "plan_name": meta["name"],
+        "price_monthly": meta["price_monthly"],
+        "features": enabled,
+        "ai_reviews_per_month": meta.get("ai_reviews_per_month", 0),
+        "max_watchlist": meta.get("max_watchlist", 0),
+        "seats": meta.get("seats", 1),
+    }
+
+
 @router.get("/status")
 async def billing_status():
     mode = _stripe_mode(settings.STRIPE_SECRET_KEY)
@@ -84,7 +100,7 @@ async def my_billing(current_user=Depends(get_current_user)):
     db = get_db()
     user = await db.users.find_one({"_id": current_user["_id"]})
     return {
-        "plan": user.get("plan", "free"),
+        **_entitlement_summary(user),
         "stripe_customer_id": user.get("stripe_customer_id"),
         "stripe_subscription_id": user.get("stripe_subscription_id"),
         "plan_updated_at": user.get("plan_updated_at"),
@@ -226,4 +242,24 @@ async def dev_upgrade(payload: DevUpgradeRequest, current_user=Depends(get_curre
             }
         },
     )
-    return {"ok": True, "plan": plan_id, "message": f"Dev upgraded to {plan_id}"}
+    updated = await db.users.find_one({"_id": current_user["_id"]})
+    return _entitlement_summary(updated)
+
+
+@router.post("/dev-downgrade")
+async def dev_downgrade(current_user=Depends(get_current_user)):
+    if settings.ENVIRONMENT.lower() == "production":
+        raise HTTPException(403, "dev-downgrade disabled in production")
+
+    db = get_db()
+    await db.users.update_one(
+        {"_id": current_user["_id"]},
+        {
+            "$set": {
+                "plan": "free",
+                "plan_updated_at": datetime.now(timezone.utc),
+            }
+        },
+    )
+    updated = await db.users.find_one({"_id": current_user["_id"]})
+    return _entitlement_summary(updated)

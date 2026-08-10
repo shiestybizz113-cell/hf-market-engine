@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from app.models.schemas import SystemHealth, PlanInfo
 from app.core.database import get_db
 from app.core.config import settings
+from app.core.plans import catalog_public
 import httpx
 
 router = APIRouter(tags=["system"])
@@ -52,88 +53,5 @@ async def health():
 
 @router.get("/pricing/plans", response_model=list[PlanInfo])
 async def pricing_plans():
-    return [
-        PlanInfo(
-            id="free",
-            name="Free",
-            price_monthly=0,
-            features=[
-                "Basic multi-asset dashboard",
-                "Watchlist up to 10 assets",
-                "3 AI summaries per day",
-                "Demo signals only",
-                "Manual portfolio tracker",
-            ],
-            ai_reviews_per_month=3,
-            max_watchlist=10,
-        ),
-        PlanInfo(
-            id="pro",
-            name="Pro Trader",
-            price_monthly=settings.PLAN_PRO_PRICE,
-            features=[
-                "Crypto, stock & ETF dashboards",
-                "AI Signal Engine",
-                "Strategy Builder",
-                "Paper Trading",
-                "Trade Journal",
-                "Basic Backtesting",
-                "Portfolio / P&L Tracker",
-                "75 AI reviews / month",
-            ],
-            ai_reviews_per_month=75,
-            max_watchlist=999,
-        ),
-        PlanInfo(
-            id="advanced",
-            name="Advanced Trader",
-            price_monthly=settings.PLAN_ADVANCED_PRICE,
-            features=[
-                "Everything in Pro",
-                "Cross-Asset Correlation Radar",
-                "Alpha Scanner",
-                "Advanced Backtesting",
-                "AI Strategy Council",
-                "Risk Engine",
-                "Macro Regime Dashboard",
-                "Weekly performance reports",
-                "300 AI reviews / month",
-            ],
-            ai_reviews_per_month=300,
-            max_watchlist=999,
-        ),
-        PlanInfo(
-            id="team",
-            name="Team / Community",
-            price_monthly=settings.PLAN_TEAM_PRICE,
-            features=[
-                "Everything in Advanced",
-                "5 team seats",
-                "Shared strategy library",
-                "Community watchlists",
-                "Shared paper-trading workspace",
-                "Team reports & admin controls",
-                "1,500 AI reviews / month",
-            ],
-            ai_reviews_per_month=1500,
-            max_watchlist=999,
-            seats=5,
-        ),
-        PlanInfo(
-            id="whitelabel",
-            name="White Label",
-            price_monthly=settings.PLAN_WHITELABEL_MONTHLY,
-            setup_fee=settings.PLAN_WHITELABEL_SETUP,
-            features=[
-                "Branded multi-asset trading terminal",
-                "Custom logo & domain",
-                "Private community dashboard",
-                "Up to 1,000 users",
-                "White-label reports",
-                "Admin controls & billing hooks",
-            ],
-            ai_reviews_per_month=5000,
-            max_watchlist=999,
-            seats=1000,
-        ),
-    ]
+    return [PlanInfo(**p) for p in catalog_public()]
+

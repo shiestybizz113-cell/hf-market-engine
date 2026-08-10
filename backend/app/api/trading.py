@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.auth import get_current_user
 from app.core.database import get_db
+from app.core.plans import require_feature
 from app.models.schemas import (
     AssetClass,
     BacktestRequest,
@@ -109,14 +110,14 @@ async def remove_watchlist(item_id: str, current_user=Depends(get_current_user))
 # ---------- Strategies ----------
 
 @router.get("/strategies", response_model=List[StrategyOut])
-async def list_strategies(current_user=Depends(get_current_user)):
+async def list_strategies(current_user=Depends(require_feature("strategy_lab"))):
     db = get_db()
     cursor = db.strategies.find({"user_id": current_user["_id"]}).sort("created_at", -1)
     return [_strategy_out(doc) async for doc in cursor]
 
 
 @router.post("/strategies", response_model=StrategyOut)
-async def create_strategy(payload: StrategyCreate, current_user=Depends(get_current_user)):
+async def create_strategy(payload: StrategyCreate, current_user=Depends(require_feature("strategy_lab"))):
     db = get_db()
     doc = {
         "_id": str(uuid.uuid4()),
@@ -140,7 +141,7 @@ async def create_strategy(payload: StrategyCreate, current_user=Depends(get_curr
 
 
 @router.delete("/strategies/{strategy_id}")
-async def delete_strategy(strategy_id: str, current_user=Depends(get_current_user)):
+async def delete_strategy(strategy_id: str, current_user=Depends(require_feature("strategy_lab"))):
     db = get_db()
     res = await db.strategies.delete_one({"_id": strategy_id, "user_id": current_user["_id"]})
     if res.deleted_count == 0:
@@ -171,19 +172,19 @@ def _strategy_out(doc: dict) -> StrategyOut:
 # ---------- Backtesting ----------
 
 @router.post("/backtests", response_model=BacktestResult)
-async def run_backtest(payload: BacktestRequest, current_user=Depends(get_current_user)):
+async def run_backtest(payload: BacktestRequest, current_user=Depends(require_feature("backtesting"))):
     return await backtest_engine.run(payload)
 
 
 # ---------- Paper Trading ----------
 
 @router.get("/paper-trades", response_model=List[PaperTradeOut])
-async def list_paper_trades(status: Optional[str] = None, current_user=Depends(get_current_user)):
+async def list_paper_trades(status: Optional[str] = None, current_user=Depends(require_feature("paper_trading"))):
     return await paper_trading_engine.list_trades(current_user["_id"], status)
 
 
 @router.post("/paper-trades", response_model=PaperTradeOut)
-async def open_paper_trade(payload: PaperTradeCreate, current_user=Depends(get_current_user)):
+async def open_paper_trade(payload: PaperTradeCreate, current_user=Depends(require_feature("paper_trading"))):
     try:
         return await paper_trading_engine.open_trade(current_user["_id"], payload)
     except ValueError as e:
@@ -191,7 +192,7 @@ async def open_paper_trade(payload: PaperTradeCreate, current_user=Depends(get_c
 
 
 @router.post("/paper-trades/{trade_id}/close", response_model=PaperTradeOut)
-async def close_paper_trade(trade_id: str, current_user=Depends(get_current_user)):
+async def close_paper_trade(trade_id: str, current_user=Depends(require_feature("paper_trading"))):
     try:
         return await paper_trading_engine.close_trade(current_user["_id"], trade_id)
     except ValueError as e:
@@ -274,10 +275,10 @@ async def add_holding(payload: HoldingCreate, current_user=Depends(get_current_u
 # ---------- Risk Review ----------
 
 @router.post("/risk-review/strategy", response_model=RiskReview)
-async def risk_review_strategy(payload: StrategyCreate):
+async def risk_review_strategy(payload: StrategyCreate, current_user=Depends(require_feature("risk_engine"))):
     return risk_engine.score_strategy(payload)
 
 
 @router.post("/risk-review/paper-trade", response_model=RiskReview)
-async def risk_review_paper(payload: PaperTradeCreate):
+async def risk_review_paper(payload: PaperTradeCreate, current_user=Depends(require_feature("risk_engine"))):
     return risk_engine.score_paper_trade(payload)
