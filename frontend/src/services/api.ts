@@ -76,9 +76,14 @@ export const addHolding = (data: any) => api.post('/portfolio', data)
 export const riskReviewStrategy = (data: any) => api.post('/risk-review/strategy', data)
 export const riskReviewPaper = (data: any) => api.post('/risk-review/paper-trade', data)
 
-// System
+// System + Billing
 export const getHealth = () => api.get('/system/health')
-export const getPlans = () => api.get('/pricing/plans')
+export const getPlans = () => api.get('/billing/plans')
+export const getBillingMe = () => api.get('/billing/me')
+export const getBillingStatus = () => api.get('/billing/status')
+export const createCheckout = (plan_id: string) => api.post('/billing/checkout', { plan_id })
+export const devUpgrade = (plan_id: string) => api.post('/billing/dev-upgrade', { plan_id })
+
 // Execution (Phase 1 paper simulation)
 export const getExecutionAlgos = () => api.get('/execution/algos')
 export const recommendAlgo = (params: {
