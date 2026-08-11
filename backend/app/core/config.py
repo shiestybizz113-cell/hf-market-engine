@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import model_validator
 from functools import lru_cache
 
 
@@ -8,6 +9,11 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "dev-secret-change-in-production"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
     ALGORITHM: str = "HS256"
+
+    # Comma-separated list of allowed CORS origins, e.g.
+    # https://app.example.com,https://staging.example.com
+    # "*" is only accepted while ENVIRONMENT != production.
+    CORS_ORIGINS: str = ""
 
     MONGODB_URL: str = "mongodb://localhost:27017"
     MONGODB_DB: str = "hf_market_engine"
@@ -39,6 +45,31 @@ class Settings(BaseSettings):
     STRIPE_PRICE_WHITELABEL: str = ""
     STRIPE_SUCCESS_URL: str = "http://localhost:5173/pricing?upgraded=1"
     STRIPE_CANCEL_URL: str = "http://localhost:5173/pricing?canceled=1"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        if not self.CORS_ORIGINS:
+            return []
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+
+    @model_validator(mode="after")
+    def _validate_production(self) -> "Settings":
+        if self.ENVIRONMENT.lower() != "production":
+            return self
+        if not self.SECRET_KEY or len(self.SECRET_KEY) < 32:
+            raise ValueError(
+                "SECRET_KEY must be a strong random value (>= 32 chars) in production"
+            )
+        if not self.MONGODB_URL.startswith("mongodb://") or "mongodb://mongo:27017" in self.MONGODB_URL:
+            raise ValueError(
+                "MONGODB_URL must point at the mongo service with authenticated app "
+                "credentials (user:pass@mongo:27017) in production"
+            )
+        if not self.cors_origin_list:
+            raise ValueError("CORS_ORIGINS must be set to your real origin(s) in production")
+        if "*" in self.cors_origin_list:
+            raise ValueError("CORS_ORIGINS may not contain '*' in production")
+        return self
 
     class Config:
         env_file = ".env"

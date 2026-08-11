@@ -1,0 +1,106 @@
+# Production deployment for hf-market-engine.
+#
+#   cp .env.example .env          # fill in secrets + APP_DOMAIN
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Edge:  Caddy (ports 80/443) -> TLS termination
+#        /api/* -> backend:8000,  /* -> frontend:80 (static SPA)
+# No host ports exposed for mongo / backend / frontend.
+# All secrets come from .env (never hardcoded).
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGODB_DB}
+      MONGO_APP_USER: ${MONGO_APP_USER}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD}
+      MONGODB_DB: ${MONGODB_DB}
+    volumes:
+      - mongo_data:/data/db
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\" -u \"$$MONGO_INITDB_ROOT_USERNAME\" -p \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin | grep -q 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: production
+      SECRET_KEY: ${SECRET_KEY}
+      MONGODB_URL: mongodb://${MONGO_APP_USER}:${MONGO_APP_PASSWORD}@mongo:27017/${MONGODB_DB}?authSource=admin
+      MONGODB_DB: ${MONGODB_DB}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      APP_WORKERS: ${APP_WORKERS:-1}
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
+      POLYGON_API_KEY: ${POLYGON_API_KEY:-}
+      ALPACA_API_KEY: ${ALPACA_API_KEY:-}
+      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
+      TWELVE_DATA_API_KEY: ${TWELVE_DATA_API_KEY:-}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      REDIS_URL: ${REDIS_URL:-redis://localhost:6379}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_PRO: ${STRIPE_PRICE_PRO:-}
+      STRIPE_PRICE_ADVANCED: ${STRIPE_PRICE_ADVANCED:-}
+      STRIPE_PRICE_TEAM: ${STRIPE_PRICE_TEAM:-}
+      STRIPE_PRICE_WHITELABEL: ${STRIPE_PRICE_WHITELABEL:-}
+      STRIPE_SUCCESS_URL: https://${APP_DOMAIN}/pricing?upgraded=1
+      STRIPE_CANCEL_URL: https://${APP_DOMAIN}/pricing?canceled=1
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+volumes:
+  mongo_data:
+  caddy_data:
+  caddy_config:

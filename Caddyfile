@@ -1,0 +1,36 @@
+# hf-market-engine TLS edge.
+#
+# Set APP_DOMAIN to your public hostname (e.g. app.example.com). Caddy will
+# automatically provision Let's Encrypt certificates. For localhost testing,
+# leave APP_DOMAIN unset (defaults to localhost and uses Caddy's internal CA).
+#
+# Routing:
+#   /api/*  -> backend:8000 (FastAPI)
+#   /*      -> frontend:80  (nginx static SPA)
+
+{$APP_DOMAIN:localhost} {
+	encode gzip zstd
+
+	# API
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+
+	# Static SPA
+	handle {
+		reverse_proxy frontend:80
+	}
+
+	# Security headers
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

@@ -21,7 +21,7 @@ services:
     environment:
       MONGODB_URL: mongodb://mongo:27017
       MONGODB_DB: hf_market_engine
-      SECRET_KEY: change-me-in-production
+      SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-do-not-use}
       ENVIRONMENT: development
     depends_on:
       - mongo

@@ -25,13 +25,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # tighten in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+if settings.cors_origin_list:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origin_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    # Development fallback only — main.py refuses to start without CORS_ORIGINS in production.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(market.router, prefix="/api")
