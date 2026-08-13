@@ -95,8 +95,13 @@ def _empty_lane(key: str, label: str, *, available: bool, reason: Optional[str],
 
 def btc_lane(*, capital_usd: float, btc_price: float,
              btc_price_at_horizon: float, evidence_state: str,
-             provider: str) -> Dict:
-    """Financial capital: spot BTC treasury."""
+             provider: str, owned_btc: float = 0.0) -> Dict:
+    """Financial capital: spot BTC treasury.
+
+    ``owned_btc`` (from the customer's fleet) is reported as an owned baseline
+    alongside the new allocation so the optimizer always sees total exposure,
+    never just the incremental purchase.
+    """
     if btc_price <= 0:
         lane = _empty_lane(
             "btc", "Buy BTC (spot treasury)", available=False,
@@ -108,6 +113,13 @@ def btc_lane(*, capital_usd: float, btc_price: float,
         return lane
     btc_exposure = capital_usd / btc_price
     horizon_value = btc_exposure * btc_price_at_horizon
+    owned_exposure = max(0.0, float(owned_btc))
+    owned_baseline = {
+        "btc_held": owned_exposure,
+        "value_now_usd": owned_exposure * btc_price,
+        "value_at_horizon_usd": owned_exposure * btc_price_at_horizon,
+        "note": "Existing treasury, held to horizon under the same horizon price assumption.",
+    }
     lane = {
         "key": "btc",
         "label": "Buy BTC (spot treasury)",
@@ -117,6 +129,8 @@ def btc_lane(*, capital_usd: float, btc_price: float,
         "capital_left": 0.0,
         "power_mw": 0.0,
         "units": btc_exposure,
+        "owned_baseline": owned_baseline,
+        "total_exposure_btc": owned_exposure + btc_exposure,
         "revenue_day": 0.0,
         "revenue_month": 0.0,
         "operating_profit_day": 0.0,
@@ -520,12 +534,20 @@ def run_capital_allocation(
     storage_capex_usd_per_mwh: float,
     storage_roundtrip_pct: float,
     cash_interest_rate_pct_year: float,
+    owned: Optional[Dict] = None,
 ) -> Dict:
     """Evaluate one canonical scenario across all four lanes.
 
     ``simulation`` forces evidence_state=SIMULATION on every lane; otherwise
     observed-live lanes use OBSERVED_LIVE and assumption lanes use
     USER_ASSUMPTION.
+
+    ``owned`` is the customer's existing fleet (from /assets, shape returned by
+    core.assets.fleet_summary). The engine accounts for it BEFORE recommending
+    new capital: owned power capacity adds to the power budget, owned mining /
+    GPU rigs consume part of it, and an owned mining fleet is valued as a
+    baseline alongside the new-purchase economics. The optimizer never
+    double-counts the owned fleet in the incremental allocation.
     """
     if simulation:
         state = SIMULATION
@@ -535,17 +557,44 @@ def run_capital_allocation(
 
     horizon_price = btc_price_at_horizon or btc_price
 
+    # ---- Existing fleet accounting (before any new capital is deployed) ----
+    owned = owned or {}
+    owned_mining = owned.get("asics", {})
+    owned_gpu = owned.get("gpus", {})
+    owned_power_mw = float(owned.get("power_mw", 0.0) or 0.0)
+    owned_btc = float(owned.get("treasury_btc", 0.0) or 0.0)
+    owned_storage_mwh = float(owned.get("storage_mwh", 0.0) or 0.0)
+
+    effective_mw = available_mw + owned_power_mw
+    owned_power_consumed_mw = (
+        float(owned_mining.get("power_kw", 0.0) or 0.0) +
+        float(owned_gpu.get("power_kw", 0.0) or 0.0)
+    ) / KW_PER_MW
+    power_for_new = max(0.0, effective_mw - owned_power_consumed_mw)
+
+    fleet_baseline = _owned_fleet_baseline(
+        owned_mining=owned_mining,
+        network=network,
+        btc_price=btc_price,
+        btc_price_at_horizon=horizon_price,
+        electricity_usd_kwh=electricity_usd_kwh,
+        pool_fee_pct=pool_fee_pct,
+        uptime_pct=uptime_pct,
+        horizon_months=horizon_months,
+    )
+
     lanes: Dict[str, Dict] = {
         "btc": btc_lane(
             capital_usd=capital_usd, btc_price=btc_price,
             btc_price_at_horizon=horizon_price,
             evidence_state=state, provider=btc_price_provider,
+            owned_btc=owned_btc,
         ),
     }
 
     if network is not None:
         lanes["mining"] = mining_lane(
-            capital_usd=capital_usd, available_mw=available_mw, asic=asic,
+            capital_usd=capital_usd, available_mw=power_for_new, asic=asic,
             network=network, btc_price=btc_price,
             electricity_usd_kwh=electricity_usd_kwh,
             pool_fee_pct=pool_fee_pct, uptime_pct=uptime_pct,
@@ -562,7 +611,7 @@ def run_capital_allocation(
         )
 
     lanes["gpu"] = gpu_lane(
-        capital_usd=capital_usd, available_mw=available_mw,
+        capital_usd=capital_usd, available_mw=power_for_new,
         electricity_usd_kwh=electricity_usd_kwh,
         gpu_model=gpu_model, gpu_capex_usd=gpu_capex_usd,
         gpu_power_kw=gpu_power_kw,
@@ -574,11 +623,11 @@ def run_capital_allocation(
     )
 
     lanes["energy"] = energy_lane(
-        available_mw=available_mw, electricity_usd_kwh=electricity_usd_kwh,
+        available_mw=power_for_new, electricity_usd_kwh=electricity_usd_kwh,
         energy_acquisition_usd_kwh=energy_acquisition_usd_kwh,
         energy_sell_price_usd_kwh=energy_sell_price_usd_kwh,
         energy_utilization_pct=energy_utilization_pct,
-        storage_mwh=storage_mwh,
+        storage_mwh=storage_mwh + owned_storage_mwh,
         storage_capex_usd_per_mwh=storage_capex_usd_per_mwh,
         storage_roundtrip_pct=storage_roundtrip_pct,
         horizon_months=horizon_months, evidence_state=assumption_state,
@@ -629,6 +678,80 @@ def run_capital_allocation(
         "ranking": ranking,
         "ranking_basis": RANKING_BASIS,
         "recommendation": recommendation,
+        "owned": {
+            "summary": {
+                "asics": owned_mining,
+                "gpus": owned_gpu,
+                "power_mw": owned_power_mw,
+                "storage_mwh": owned_storage_mwh,
+                "treasury_btc": owned_btc,
+            },
+            "effective_power_mw": effective_mw,
+            "owned_power_consumed_mw": round(owned_power_consumed_mw, 3),
+            "power_available_for_new_mw": round(power_for_new, 3),
+            "fleet_baseline": fleet_baseline,
+            "note": (
+                "Existing fleet is accounted for before new capital is deployed: "
+                "owned power adds to the budget, owned rigs consume part of it, "
+                "and owned BTC is valued alongside the incremental treasury."
+            ),
+        },
+    }
+
+
+def _owned_fleet_baseline(
+    *,
+    owned_mining: Dict,
+    network: Optional[NetworkData],
+    btc_price: float,
+    btc_price_at_horizon: float,
+    electricity_usd_kwh: float,
+    pool_fee_pct: float,
+    uptime_pct: float,
+    horizon_months: int,
+) -> Optional[Dict]:
+    """Value the customer's existing mining fleet on the same economic frame.
+
+    Uses aggregate fleet numbers (hashrate_ths, power_kw) converted to a
+    representative per-unit profile, so no single catalog model is assumed
+    unless the fleet is homogeneous. Returns None when there is no fleet or no
+    network data to price it against.
+    """
+    units = int(owned_mining.get("units", 0) or 0)
+    total_hash = float(owned_mining.get("hashrate_ths", 0.0) or 0.0)
+    total_power_kw = float(owned_mining.get("power_kw", 0.0) or 0.0)
+    if units <= 0 or total_hash <= 0 or network is None or btc_price <= 0:
+        return None
+
+    hash_per_unit = total_hash / units
+    power_watts_per_unit = (total_power_kw / units) * 1000.0
+    est = compute_estimate(
+        hashrate_ths=hash_per_unit,
+        power_watts=power_watts_per_unit,
+        electricity_usd_kwh=electricity_usd_kwh,
+        pool_fee_pct=pool_fee_pct,
+        uptime_pct=uptime_pct,
+        btc_price=btc_price,
+        hardware_cost_usd=0.0,
+        network=network,
+    )
+    power_mw = total_power_kw / KW_PER_MW
+    revenue_month = est["revenue_day"] * units * DAYS_PER_MONTH
+    profit_month = est["operating_profit_day"] * units * DAYS_PER_MONTH
+    return {
+        "units": units,
+        "hashrate_ths": round(total_hash, 1),
+        "power_mw": round(power_mw, 3),
+        "revenue_month": round(revenue_month, 2),
+        "operating_profit_month": round(profit_month, 2),
+        "profit_per_mw": round(profit_month / power_mw, 2) if power_mw > 0 else None,
+        "horizon_value": round(profit_month * horizon_months, 2),
+        "break_even_electricity_usd_kwh": est.get("break_even_electricity_usd_kwh"),
+        "basis": (
+            "Existing-fleet baseline under the same BTC price, network and "
+            "electricity assumptions as the new-purchase lanes. No new capital "
+            "is deployed to reach it."
+        ),
     }
 
 
@@ -858,11 +981,17 @@ def _shift_network(net: Optional[Dict], difficulty: float) -> Optional[NetworkDa
 # Optimizer (proposes only — never executes)
 # --------------------------------------------------------------------------- #
 def propose_allocation(*, capital_usd: float, lanes: Dict[str, Dict],
-                       risk_profile: str) -> Dict:
+                       risk_profile: str,
+                       evidence: Optional[Dict] = None) -> Dict:
     """Heuristic proposal of a capital split across the four buckets.
 
     PROPOSAL ONLY. Returns pct + per-lane USD. Does not trade, spend or deploy.
     The AI council explains why, and a human approves before anything executes.
+
+    ``evidence`` optionally carries per-lane evidence quality (from the proof
+    fabric). When a lane's evidence is STALE / CONFLICTING / UNAVAILABLE, the
+    proposal is labeled ASSUMPTION_HEAVY so nobody mistakes an assumption
+    lane for an observed one.
     """
     profile = RISK_PROFILES.get(risk_profile, RISK_PROFILES["balanced"])
     reserve_pct = profile["reserve_pct"]
@@ -933,5 +1062,50 @@ def propose_allocation(*, capital_usd: float, lanes: Dict[str, Dict],
             "This optimizer proposes an allocation. It cannot and will not "
             "trade, spend, or deploy capital. Every lane is conditional on "
             "its stated assumptions and evidence."
+        ),
+        "evidence": _evidence_quality_block(evidence),
+    }
+
+
+def _evidence_quality_block(evidence: Optional[Dict]) -> Dict:
+    """Evidence-quality label attached to a proposal.
+
+    A proposal is ASSUMPTION_HEAVY when any recommended operating lane rests on
+    stale / conflicting / unavailable evidence or on operator assumptions
+    rather than observed data.
+    """
+    if not evidence:
+        return {
+            "label": "UNKNOWN",
+            "assumption_heavy": False,
+            "per_lane": {},
+            "note": "No evidence fabric attached to this proposal.",
+        }
+    per_lane = {}
+    assumption_heavy_lanes = []
+    for key, lane in evidence.items():
+        per_lane[key] = {
+            "label": lane.get("label"),
+            "quality_label": lane.get("quality_label", "UNAVAILABLE"),
+            "quality_score": lane.get("quality_score", 0),
+            "conflict_count": lane.get("conflict_count", 0),
+            "facts_used": lane.get("facts_used", []),
+        }
+        q = per_lane[key]["quality_label"]
+        if q in ("STALE", "CONFLICTING", "UNAVAILABLE", "PARTIAL"):
+            assumption_heavy_lanes.append(key)
+
+    score = per_lane["mining"]["quality_score"] if "mining" in per_lane else None
+    assumption_heavy = len(assumption_heavy_lanes) > 0 or score is None
+    return {
+        "label": "ASSUMPTION_HEAVY" if assumption_heavy else "EVIDENCE_BACKED",
+        "assumption_heavy": assumption_heavy,
+        "assumption_heavy_lanes": assumption_heavy_lanes,
+        "mining_quality_score": score,
+        "per_lane": per_lane,
+        "note": (
+            "Lane evidence quality comes from the proof fabric. A lane is "
+            "assumption-heavy when its key facts are stale, conflicting, "
+            "unavailable, or operator assumptions rather than observed data."
         ),
     }
