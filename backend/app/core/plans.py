@@ -65,9 +65,11 @@ PLAN_CATALOG: List[Dict] = [
         "features": [
             "Everything in Pro",
             "Execution research + sim algos",
-            "Fleet modeling",
+            "Fleet modeling (multi-site)",
+            "Mining scenarios (custom vectors, unlimited)",
             "Higher signal volume",
             "Priority data refresh",
+            "Operator benchmarks (early access)",
             "Watchlist 200 assets",
         ],
         "ai_reviews_per_month": 500,
@@ -84,6 +86,8 @@ PLAN_CATALOG: List[Dict] = [
             "5 seats",
             "Shared watchlists (roadmap)",
             "Admin seat management",
+            "Desk/operator workspace (fleet + treasury)",
+            "API access (read)",
         ],
         "ai_reviews_per_month": 2000,
         "max_watchlist": 500,
@@ -99,6 +103,9 @@ PLAN_CATALOG: List[Dict] = [
             "Custom domain (Phase 2 runtime)",
             "Seat pool",
             "Dedicated support path",
+            "Full API + data feeds",
+            "White-labeled decision layer",
+            "Anonymized operator benchmark access",
         ],
         "ai_reviews_per_month": 10000,
         "max_watchlist": 2000,
@@ -184,6 +191,19 @@ async def consume_ai_review(user: dict) -> None:
         {"_id": user_id, "ai_review_period": period},
         {"$inc": {"ai_reviews_used": 1}},
     )
+
+
+async def try_consume_ai_review(user: dict) -> bool:
+    """Reserve one AI review; return False (without raising) when the budget
+    is spent. Used where the core result must still be returned even if the
+    AI narrative is skipped (mining/decision layer)."""
+    try:
+        await consume_ai_review(user)
+        return True
+    except HTTPException as exc:
+        if exc.status_code == 402:
+            return False
+        raise
 
 
 def has_feature(user_plan: str, feature: str) -> bool:

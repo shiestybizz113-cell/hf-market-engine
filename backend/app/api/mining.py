@@ -18,7 +18,7 @@ from app.core.mining import (
     ASIC_CATALOG, asic_for, compute_estimate, fleet_estimate,
     mine_vs_buy as core_mine_vs_buy, network_data_dict, scenario_table,
 )
-from app.core.plans import require_feature, has_feature
+from app.core.plans import require_feature, has_feature, try_consume_ai_review
 from app.models.schemas import (
     AsicModelInfo, MiningEstimateRequest, MiningEstimateResult,
     MineVsBuyRequest, MineVsBuyResult, MiningScenarioRequest, MiningScenarioResult,
@@ -194,18 +194,19 @@ async def estimate(
 
     ai_review = None
     if has_feature(current_user.get("plan", "free"), "mining_analysis"):
-        context = {
-            "asic": asic,
-            "btc_price": flat["btc_price"],
-            "electricity_usd_kwh": payload.electricity_usd_kwh,
-            "pool_fee_pct": payload.pool_fee_pct,
-            "uptime_pct": payload.uptime_pct,
-            "network": network_data_dict(network),
-            "estimates": est,
-        }
-        ai_review = await ai.mining_review_for(
-            context, user_id=current_user["_id"], simulation=simulation
-        )
+        if await try_consume_ai_review(current_user):
+            context = {
+                "asic": asic,
+                "btc_price": flat["btc_price"],
+                "electricity_usd_kwh": payload.electricity_usd_kwh,
+                "pool_fee_pct": payload.pool_fee_pct,
+                "uptime_pct": payload.uptime_pct,
+                "network": network_data_dict(network),
+                "estimates": est,
+            }
+            ai_review = await ai.mining_review_for(
+                context, user_id=current_user["_id"], simulation=simulation
+            )
 
     return MiningEstimateResult(
         simulation=simulation,

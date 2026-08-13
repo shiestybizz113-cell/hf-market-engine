@@ -13,7 +13,7 @@ from app.core import ai
 from app.core.scenario import SCENARIO_PRESETS, run_scenario_set
 from app.core.allocation import allocate, rank_options
 from app.api.mining import _catalog_item, _live_context, _persist_mining_receipt
-from app.core.plans import require_feature, has_feature
+from app.core.plans import require_feature, has_feature, try_consume_ai_review
 from app.models.schemas import (
     ScenarioPreset, ScenarioVector, ScenarioRunRequest, ScenarioRunResult,
     ScenarioRunResultItem, AllocationRequest, AllocationResult, AllocationOption,
@@ -118,7 +118,8 @@ async def scenario_run(
     )
 
     ai_review = None
-    if has_feature(current_user.get("plan", "free"), "scenario_engine"):
+    if has_feature(current_user.get("plan", "free"), "scenario_engine") \
+            and await try_consume_ai_review(current_user):
         ai_review = await ai.scenario_review_for(
             {
                 "btc_price": btc_price,
@@ -201,7 +202,8 @@ async def allocation_run(
     )
 
     ai_review = None
-    if has_feature(current_user.get("plan", "free"), "capital_allocation"):
+    if has_feature(current_user.get("plan", "free"), "capital_allocation") \
+            and await try_consume_ai_review(current_user):
         ai_review = await ai.allocation_review_for(
             {
                 "capital_usd": payload.capital_usd,
