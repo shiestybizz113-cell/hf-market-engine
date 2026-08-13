@@ -12,13 +12,14 @@ from app.core.infrastructure_data import (
     list_hardware_offers,
 )
 from app.core.plans import require_feature
+from app.core.redaction import scrub_public_sources
 
 router = APIRouter(tags=["capital-infrastructure"])
 
 
 @router.get("/hardware/offers")
 async def hardware_offers(current_user=Depends(get_current_user)):
-    return await list_hardware_offers(current_user["_id"])
+    return scrub_public_sources(await list_hardware_offers(current_user["_id"]))
 
 
 @router.get("/compute/offers")
@@ -28,9 +29,9 @@ async def compute_offers(
     billing_model: Optional[str] = Query(default=None),
     current_user=Depends(get_current_user),
 ):
-    return await list_compute_offers(
+    return scrub_public_sources(await list_compute_offers(
         current_user["_id"], model=model, region=region, billing_model=billing_model,
-    )
+    ))
 
 
 @router.get("/energy/prices")
@@ -38,7 +39,7 @@ async def energy_prices(
     region: Optional[str] = Query(default=None),
     current_user=Depends(get_current_user),
 ):
-    return await list_energy_prices(current_user["_id"], region=region)
+    return scrub_public_sources(await list_energy_prices(current_user["_id"], region=region))
 
 
 # Persistent operator/fleet state is the Advanced+ fleet-modeling entitlement.
