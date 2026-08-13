@@ -4,7 +4,7 @@ Execution API — Phase 1 paper only. Phase 2 live routes will reuse the same su
 
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Optional
-from app.api.auth import get_current_user
+from app.core.plans import require_feature
 from app.models.execution import (
     ParentOrderCreate, ParentOrder, ExecutionAnalytics,
     ExecutionAlgoInfo, ExecutionAlgoConfig, ExecutionUrgency,
@@ -36,13 +36,13 @@ async def recommend_algo(
     side: str = "buy",
     quantity: float = 1.0,
     urgency: ExecutionUrgency = ExecutionUrgency.MEDIUM,
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_feature("execution_sim")),
 ):
     return await execution_engine.recommend_algo(asset, asset_class, side, quantity, urgency)
 
 
 @router.post("/orders", response_model=ParentOrder)
-async def submit_order(payload: ParentOrderCreate, current_user=Depends(get_current_user)):
+async def submit_order(payload: ParentOrderCreate, current_user=Depends(require_feature("execution_sim"))):
     """
     Submit a parent order.
     Phase 1: paper_mode must be True (enforced by engine).
@@ -56,12 +56,12 @@ async def submit_order(payload: ParentOrderCreate, current_user=Depends(get_curr
 
 
 @router.get("/orders", response_model=List[ParentOrder])
-async def list_orders(status: Optional[str] = None, current_user=Depends(get_current_user)):
+async def list_orders(status: Optional[str] = None, current_user=Depends(require_feature("execution_sim"))):
     return await execution_engine.list_parent_orders(current_user["_id"], status)
 
 
 @router.get("/orders/{parent_id}", response_model=ParentOrder)
-async def get_order(parent_id: str, current_user=Depends(get_current_user)):
+async def get_order(parent_id: str, current_user=Depends(require_feature("execution_sim"))):
     order = await execution_engine.get_parent_order(current_user["_id"], parent_id)
     if not order:
         raise HTTPException(404, "Order not found")
@@ -69,7 +69,7 @@ async def get_order(parent_id: str, current_user=Depends(get_current_user)):
 
 
 @router.post("/orders/{parent_id}/cancel", response_model=ParentOrder)
-async def cancel_order(parent_id: str, current_user=Depends(get_current_user)):
+async def cancel_order(parent_id: str, current_user=Depends(require_feature("execution_sim"))):
     try:
         return await execution_engine.cancel_parent_order(current_user["_id"], parent_id)
     except ValueError as e:
@@ -77,7 +77,7 @@ async def cancel_order(parent_id: str, current_user=Depends(get_current_user)):
 
 
 @router.get("/orders/{parent_id}/analytics", response_model=ExecutionAnalytics)
-async def order_analytics(parent_id: str, current_user=Depends(get_current_user)):
+async def order_analytics(parent_id: str, current_user=Depends(require_feature("execution_sim"))):
     analytics = await execution_engine.get_analytics(current_user["_id"], parent_id)
     if not analytics:
         raise HTTPException(404, "Analytics not available")

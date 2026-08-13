@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.auth import get_current_user
 from app.core.database import get_db
-from app.core.plans import require_feature
+from app.core.plans import require_feature, max_watchlist_for
 from app.models.schemas import (
     AssetClass,
     BacktestRequest,
@@ -66,9 +66,15 @@ async def add_watchlist(payload: WatchlistItemCreate, current_user=Depends(get_c
     if not symbol:
         raise HTTPException(400, "Symbol required")
 
+    plan = current_user.get("plan", "free")
+    limit = max_watchlist_for(plan)
     count = await db.watchlist.count_documents({"user_id": current_user["_id"]})
-    if count >= 10:
-        raise HTTPException(400, "Free plan allows up to 10 watchlist items — upgrade to Pro for unlimited")
+    if count >= limit:
+        raise HTTPException(
+            400,
+            f"{plan.capitalize()} plan allows up to {limit} watchlist items — "
+            "upgrade to Pro for more.",
+        )
 
     existing = await db.watchlist.find_one({
         "user_id": current_user["_id"], "symbol": symbol, "asset_class": payload.asset_class.value,

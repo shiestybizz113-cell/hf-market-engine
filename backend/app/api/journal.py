@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 from app.api.auth import get_current_user
+from app.core.plans import consume_ai_review
 from app.engines.journal_engine import journal_engine
 
 router = APIRouter(prefix="/journal", tags=["journal"])
@@ -65,6 +66,7 @@ async def list_journal(current_user=Depends(get_current_user)):
 
 @router.post("", response_model=JournalOut)
 async def create_journal(payload: JournalCreate, current_user=Depends(get_current_user)):
+    await consume_ai_review(current_user)
     e = await journal_engine.create_entry(
         current_user["_id"],
         asset=payload.asset,

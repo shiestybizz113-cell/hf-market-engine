@@ -16,7 +16,13 @@ from datetime import datetime, timezone
 from app.api.auth import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.plans import catalog_public, PLAN_CATALOG, FEATURE_MIN_PLAN, has_feature
+from app.core.plans import (
+    catalog_public,
+    PLAN_CATALOG,
+    FEATURE_MIN_PLAN,
+    has_feature,
+    ai_reviews_remaining,
+)
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -101,6 +107,7 @@ async def my_billing(current_user=Depends(get_current_user)):
     user = await db.users.find_one({"_id": current_user["_id"]})
     return {
         **_entitlement_summary(user),
+        "ai_reviews_remaining": await ai_reviews_remaining(user),
         "stripe_customer_id": user.get("stripe_customer_id"),
         "stripe_subscription_id": user.get("stripe_subscription_id"),
         "plan_updated_at": user.get("plan_updated_at"),

@@ -5,9 +5,11 @@ Phase 1: plan stored on user document; gates enforced in API.
 Stripe Checkout upgrades plan via webhook (or dev upgrade endpoint).
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional
+from datetime import datetime, timezone
 from fastapi import HTTPException, Depends
 from app.api.auth import get_current_user
+from app.core.database import get_db
 
 PLAN_RANK = {
     "free": 0,
@@ -113,6 +115,64 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
 
 def plan_rank(plan: str) -> int:
     return PLAN_RANK.get((plan or "free").lower(), 0)
+
+
+def plan_meta(plan: str) -> Dict:
+    """Catalog entry for a plan id (defaults to Free)."""
+    return next((p for p in PLAN_CATALOG if p["id"] == plan), PLAN_CATALOG[0])
+
+
+def ai_review_allowance(plan: str) -> int:
+    return int(plan_meta(plan).get("ai_reviews_per_month", 0))
+
+
+def max_watchlist_for(plan: str) -> int:
+    return int(plan_meta(plan).get("max_watchlist", 0))
+
+
+async def ai_reviews_remaining(user: dict) -> int:
+    """Reviews left for the current calendar month on the user's current plan."""
+    db = get_db()
+    plan = user.get("plan", "free")
+    limit = ai_review_allowance(plan)
+    period = datetime.now(timezone.utc).strftime("%Y-%m")
+    if user.get("ai_review_period") != period:
+        return limit
+    return max(0, limit - int(user.get("ai_reviews_used", 0)))
+
+
+async def consume_ai_review(user: dict) -> None:
+    """Reserve one AI review against the user's monthly budget.
+
+    Raises 402 Payment Required when the current month's allowance is spent.
+    Counter lives on the user document and rolls over each calendar month.
+    """
+    db = get_db()
+    user_id = user["_id"]
+    plan = user.get("plan", "free")
+    limit = ai_review_allowance(plan)
+    period = datetime.now(timezone.utc).strftime("%Y-%m")
+
+    if user.get("ai_review_period") != period:
+        await db.users.update_one(
+            {"_id": user_id},
+            {"$set": {"ai_review_period": period, "ai_reviews_used": 1}},
+        )
+        return
+
+    used = int(user.get("ai_reviews_used", 0))
+    if used >= limit:
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"AI review limit reached ({used}/{limit} used this month on the "
+                f"{plan} plan). Upgrade at /pricing to unlock more."
+            ),
+        )
+    await db.users.update_one(
+        {"_id": user_id, "ai_review_period": period},
+        {"$inc": {"ai_reviews_used": 1}},
+    )
 
 
 def has_feature(user_plan: str, feature: str) -> bool:
