@@ -13,11 +13,11 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.auth import get_current_user
 from app.api.mining import _catalog_item, _live_context
 from app.core import ai
-from app.core.capital_allocation import RISK_PROFILES, SCENARIO_DEFS, propose_allocation, run_capital_allocation
+from app.core.capital_allocation import RISK_PROFILES, SCENARIO_DEFS, _rank_lanes, propose_allocation, run_capital_allocation
 from app.core.capital_evidence import apply_evidence_to_result, prepare_capital_evidence
+from app.core.capital_integrity import apply_energy_storage_integrity
 from app.core.capital_scenarios_v2 import run_capital_scenarios_v2
 from app.core.database import get_db
 from app.core.plans import has_feature, require_feature, try_consume_ai_review
@@ -96,8 +96,11 @@ async def _run_prepared(
         owned=prepared["owned"],
     )
 
-    # Make the values persisted in engine inputs match the evidence-resolved
-    # values actually consumed, not the pre-resolution request defaults.
+    # Correct legacy energy/storage units + capital basis before ranking or AI.
+    apply_energy_storage_integrity(result)
+    result["ranking"] = _rank_lanes(result["lanes"])
+
+    # Persist the exact evidence-resolved values actually consumed.
     result["inputs"]["asic"] = effective["asic"]
     result["inputs"]["gpu_capex_usd"] = effective.get("gpu_capex_usd")
     result["inputs"]["gpu_power_kw"] = effective.get("gpu_power_kw")
