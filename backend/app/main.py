@@ -11,6 +11,7 @@ from app.api import (
 )
 from app.core.config import settings
 from app.core.database import close_mongo_connection, connect_to_mongo, get_db
+from app.core.infrastructure_data import close_infrastructure_cache
 from app.core.rate_limit import check_rate_limit, close_rate_limit_client
 
 
@@ -18,6 +19,7 @@ from app.core.rate_limit import check_rate_limit, close_rate_limit_client
 async def lifespan(app: FastAPI):
     await connect_to_mongo()
     yield
+    await close_infrastructure_cache()
     await close_rate_limit_client()
     await close_mongo_connection()
 
