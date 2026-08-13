@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api import (
     auth, billing, capital, decision, evidence, execution, infrastructure,
@@ -10,12 +11,14 @@ from app.api import (
 )
 from app.core.config import settings
 from app.core.database import close_mongo_connection, connect_to_mongo, get_db
+from app.core.rate_limit import check_rate_limit, close_rate_limit_client
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_to_mongo()
     yield
+    await close_rate_limit_client()
     await close_mongo_connection()
 
 
@@ -49,12 +52,31 @@ else:
 
 
 @app.middleware("http")
-async def request_identity(request: Request, call_next):
-    """Give every public request a traceable ID without storing request bodies."""
+async def public_edge_controls(request: Request, call_next):
+    """Trace every request and enforce shared public rate limits."""
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
     request.state.request_id = request_id
-    response = await call_next(request)
+
+    allowed, limit = await check_rate_limit(request)
+    if not allowed:
+        response = JSONResponse(
+            status_code=429,
+            content={
+                "detail": "Rate limit exceeded",
+                "request_id": request_id,
+                "retry_after_seconds": limit.get("window_seconds", 60),
+            },
+        )
+        response.headers["Retry-After"] = str(limit.get("window_seconds", 60))
+    else:
+        response = await call_next(request)
+
     response.headers["X-Request-ID"] = request_id
+    if limit.get("limit") is not None:
+        response.headers["X-RateLimit-Limit"] = str(limit["limit"])
+        response.headers["X-RateLimit-Remaining"] = str(limit.get("remaining", 0))
+    if limit.get("degraded"):
+        response.headers["X-RateLimit-State"] = "degraded"
     return response
 
 
