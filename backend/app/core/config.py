@@ -76,17 +76,37 @@ class Settings(BaseSettings):
     def _validate_production(self) -> "Settings":
         if self.ENVIRONMENT.lower() != "production":
             return self
-        if not self.SECRET_KEY or len(self.SECRET_KEY) < 32:
-            raise ValueError("SECRET_KEY must be a strong random value (>= 32 chars) in production")
-        if not self.MONGODB_URL.startswith("mongodb://") or "mongodb://mongo:27017" in self.MONGODB_URL:
+
+        secret_lower = (self.SECRET_KEY or "").lower()
+        if (
+            not self.SECRET_KEY
+            or len(self.SECRET_KEY) < 32
+            or "change-me" in secret_lower
+            or "dev-secret" in secret_lower
+            or "replace-me" in secret_lower
+        ):
             raise ValueError(
-                "MONGODB_URL must point at the mongo service with authenticated app "
-                "credentials (user:pass@mongo:27017) in production"
+                "SECRET_KEY must be a real random value (>= 32 chars); example/dev placeholders are rejected in production"
             )
+
+        mongo_lower = (self.MONGODB_URL or "").lower()
+        if (
+            not self.MONGODB_URL.startswith("mongodb://")
+            or "mongodb://mongo:27017" in self.MONGODB_URL
+            or "change-me" in mongo_lower
+            or "replace-me" in mongo_lower
+        ):
+            raise ValueError(
+                "MONGODB_URL must contain real authenticated app credentials in production; placeholder credentials are rejected"
+            )
+
         if not self.cors_origin_list:
             raise ValueError("CORS_ORIGINS must be set to your real origin(s) in production")
         if "*" in self.cors_origin_list:
             raise ValueError("CORS_ORIGINS may not contain '*' in production")
+        if any("example.com" in origin.lower() for origin in self.cors_origin_list):
+            raise ValueError("CORS_ORIGINS still contains an example.com placeholder")
+
         if self.INFRA_PROVIDER_TIMEOUT <= 0 or self.INFRA_PROVIDER_TIMEOUT > 60:
             raise ValueError("INFRA_PROVIDER_TIMEOUT must be > 0 and <= 60 seconds")
         return self
