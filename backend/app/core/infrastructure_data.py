@@ -1,25 +1,26 @@
 """Infrastructure market-data fabric for Capital Command Center V2.
 
-This module normalizes hardware, GPU-compute, and energy observations into the
-same immutable EvidenceFact store used by market/mining data.
+ASIC, GPU-compute, and energy observations all normalize into the same immutable
+EvidenceFact store used by Capital. Upstream refreshes are shared across workers
+through Redis so public traffic does not stampede data providers.
 
-Production feeds are configured as canonical JSON endpoints:
+Configured canonical feeds:
   HARDWARE_OFFERS_URL -> {"offers": [...]}
   GPU_OFFERS_URL      -> {"offers": [...]}
   ENERGY_PRICES_URL   -> {"prices": [...]}
 
-If a feed is not configured or is unavailable, reference catalog facts remain
-USER_ASSUMPTION. Nothing is promoted to OBSERVED_LIVE without an observed
-provider payload.
+No configured/available feed means reference/user-assumption/unavailable data.
+Nothing becomes OBSERVED_LIVE without an observed provider payload.
 """
 
 import hashlib
 import json
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
 import httpx
+from redis.asyncio import Redis
 
 from app.core import evidence as E
 from app.core.config import settings
@@ -28,9 +29,23 @@ from app.core.evidence_broker import capture_observation, resolve_metric
 from app.core.gpu import GPU_CATALOG
 from app.core.mining import ASIC_CATALOG
 
+MAX_SNAPSHOT_BYTES = 2_000_000
+HARDWARE_REFRESH_SECONDS = 300
+COMPUTE_REFRESH_SECONDS = 120
+ENERGY_REFRESH_SECONDS = 60
+
+_redis: Optional[Redis] = None
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _redis_client() -> Redis:
+    global _redis
+    if _redis is None:
+        _redis = Redis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
+    return _redis
 
 
 def _parse_dt(value: Any) -> datetime:
@@ -50,8 +65,7 @@ def _items(payload: Any, key: str) -> List[Dict]:
         return [x for x in payload if isinstance(x, dict)]
     if isinstance(payload, dict):
         raw = payload.get(key, payload.get("data", []))
-        if isinstance(raw, list):
-            return [x for x in raw if isinstance(x, dict)]
+        return [x for x in raw if isinstance(x, dict)] if isinstance(raw, list) else []
     return []
 
 
@@ -63,26 +77,13 @@ def _public_fact(doc: Dict) -> Dict:
     return out
 
 
-async def _store_snapshot(
-    *, domain: str, provider: str, source_reference: str, payload: Any,
-    observed_at: Optional[datetime] = None, _db=None,
-) -> str:
-    db = _db or get_db()
-    snapshot_id = str(uuid.uuid4())
-    encoded = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
-    doc = {
-        "_id": snapshot_id,
-        "snapshot_id": snapshot_id,
-        "domain": domain,
-        "provider": provider,
-        "source_reference": source_reference,
-        "observed_at": observed_at or _now(),
-        "ingested_at": _now(),
-        "sha256": hashlib.sha256(encoded).hexdigest(),
-        "payload": payload,
-    }
-    await db.provider_snapshots.insert_one(doc)
-    return f"snapshot:{snapshot_id}"
+async def _refresh_slot(key: str, ttl_seconds: int) -> bool:
+    """Cross-worker refresh gate. Fail-open if Redis is unavailable."""
+    try:
+        redis = _redis_client()
+        return bool(await redis.set(f"infra-refresh:{key}", "1", ex=ttl_seconds, nx=True))
+    except Exception:
+        return True
 
 
 async def _fetch_json(url: str) -> Any:
@@ -97,83 +98,107 @@ async def _fetch_json(url: str) -> Any:
         return response.json()
 
 
-async def seed_reference_catalogs(_db=None) -> Dict[str, int]:
-    """Seed/refresh reference hardware + GPU facts as assumptions, never live."""
+async def _store_snapshot(
+    *, domain: str, provider: str, source_reference: str, payload: Any,
+    observed_at: Optional[datetime] = None, _db=None,
+) -> str:
+    """Persist a provider payload once per content hash; cap large raw payloads."""
     db = _db or get_db()
-    hardware = 0
-    compute = 0
+    observed = observed_at or _now()
+    encoded = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+
+    existing = await db.provider_snapshots.find_one({
+        "domain": domain,
+        "provider": provider,
+        "source_reference": source_reference,
+        "sha256": digest,
+    })
+    if existing:
+        return f"snapshot:{existing.get('snapshot_id') or existing['_id']}"
+
+    snapshot_id = str(uuid.uuid4())
+    too_large = len(encoded) > MAX_SNAPSHOT_BYTES
+    if too_large:
+        preview = encoded[:100_000].decode("utf-8", errors="replace")
+        stored_payload: Any = {"preview": preview, "truncated": True}
+    else:
+        stored_payload = payload
+
+    await db.provider_snapshots.insert_one({
+        "_id": snapshot_id,
+        "snapshot_id": snapshot_id,
+        "domain": domain,
+        "provider": provider,
+        "source_reference": source_reference,
+        "observed_at": observed,
+        "ingested_at": _now(),
+        "sha256": digest,
+        "raw_bytes": len(encoded),
+        "payload_truncated": too_large,
+        "payload": stored_payload,
+    })
+    return f"snapshot:{snapshot_id}"
+
+
+async def seed_reference_catalogs(_db=None) -> Dict[str, int]:
+    """Seed versioned reference facts as assumptions. Never call them live."""
+    db = _db or get_db()
+    hardware = compute = 0
 
     for model, item in ASIC_CATALOG.items():
-        common = {
-            "domain": "hardware",
-            "subject_id": model,
-            "state": E.USER_ASSUMPTION,
-            "provider": "reference_catalog",
-            "source_type": "reference",
-            "source_reference": "internal:ASIC_CATALOG",
-            "methodology": "Versioned internal reference catalog; indicative, not a live quote",
-            "extra": {"model": model, "name": item.get("model"), "class": item.get("class")},
-            "_db": db,
-        }
+        common = dict(
+            domain="hardware", subject_id=model, state=E.USER_ASSUMPTION,
+            provider="reference_catalog", source_type="reference",
+            source_reference="internal:ASIC_CATALOG",
+            methodology="Versioned indicative reference catalog; not a live quote",
+            extra={"model": model, "name": item.get("model"), "class": item.get("class")},
+            _db=db,
+        )
         await capture_observation(metric="asic_hashrate", value=float(item["hashrate_ths"]), unit="ths", **common)
         await capture_observation(metric="asic_power", value=float(item["power_watts"]), unit="watts", **common)
         await capture_observation(metric="asic_price", value=float(item["price_usd"]), unit="usd", **common)
         hardware += 3
 
     for model, item in GPU_CATALOG.items():
-        common = {
-            "domain": "gpu",
-            "subject_id": model,
-            "state": E.USER_ASSUMPTION,
-            "provider": "reference_catalog",
-            "source_type": "reference",
-            "source_reference": "internal:GPU_CATALOG",
-            "methodology": "Versioned internal reference catalog; indicative, not a live quote",
-            "extra": {"gpu_model": model, "name": item.get("model")},
-            "_db": db,
-        }
+        common = dict(
+            domain="gpu", subject_id=model, state=E.USER_ASSUMPTION,
+            provider="reference_catalog", source_type="reference",
+            source_reference="internal:GPU_CATALOG",
+            methodology="Versioned indicative reference catalog; not a live quote",
+            extra={"gpu_model": model, "name": item.get("model")}, _db=db,
+        )
         await capture_observation(metric="gpu_capex", value=float(item["capex_usd"]), unit="usd", **common)
         await capture_observation(metric="gpu_power", value=float(item["power_kw"]), unit="kw", **common)
         await capture_observation(
-            domain="gpu",
-            metric="compute_offer",
-            subject_id=f"{model}|reference|global|on_demand",
-            value=float(item["cloud_rental_usd_hr"]),
-            unit="usd_gpu_hr",
-            state=E.USER_ASSUMPTION,
-            provider="reference_catalog",
-            source_type="reference",
+            domain="gpu", metric="compute_offer",
+            subject_id=f"{model}|reference_catalog|global|on_demand",
+            value=float(item["cloud_rental_usd_hr"]), unit="usd_gpu_hr",
+            state=E.USER_ASSUMPTION, provider="reference_catalog", source_type="reference",
             source_reference="internal:GPU_CATALOG",
-            methodology="Indicative cloud rental reference, not a live provider quote",
-            extra={
-                "gpu_model": model,
-                "name": item.get("model"),
-                "region": "global",
-                "billing_model": "on_demand",
-                "availability": "reference_only",
-            },
+            methodology="Indicative compute price reference; not a live provider quote",
+            extra={"gpu_model": model, "name": item.get("model"), "region": "global",
+                   "billing_model": "on_demand", "availability": "reference_only"},
             _db=db,
         )
         compute += 3
-
     return {"hardware_facts_seeded": hardware, "compute_facts_seeded": compute}
 
 
-async def refresh_hardware_offers(_db=None) -> Dict:
+async def refresh_hardware_offers(_db=None, *, force: bool = False) -> Dict:
     db = _db or get_db()
     await seed_reference_catalogs(db)
     url = getattr(settings, "HARDWARE_OFFERS_URL", "")
     if not url:
         return {"configured": False, "observed": 0, "status": "reference_only"}
+    if not force and not await _refresh_slot("hardware", HARDWARE_REFRESH_SECONDS):
+        return {"configured": True, "observed": 0, "status": "fresh_cached"}
 
     provider_default = getattr(settings, "HARDWARE_PROVIDER_ID", "hardware_feed")
     try:
         payload = await _fetch_json(url)
-        observed = _now()
-        snapshot_ref = await _store_snapshot(
-            domain="hardware", provider=provider_default, source_reference=url,
-            payload=payload, observed_at=observed, _db=db,
-        )
+        snapshot = await _store_snapshot(domain="hardware", provider=provider_default,
+                                         source_reference=url, payload=payload, _db=db)
         count = 0
         for item in _items(payload, "offers"):
             model = str(item.get("model") or item.get("asic_model") or "").strip()
@@ -185,14 +210,9 @@ async def refresh_hardware_offers(_db=None) -> Dict:
             condition = str(item.get("condition") or "new")
             source_type = str(item.get("source_type") or "live_api")
             observed_at = _parse_dt(item.get("observed_at"))
-            extra = {
-                "model": model,
-                "name": item.get("name") or model,
-                "condition": condition,
-                "quantity": item.get("quantity"),
-                "shipping_usd": item.get("shipping_usd"),
-                "region": region,
-            }
+            extra = {"model": model, "name": item.get("name") or model, "condition": condition,
+                     "quantity": item.get("quantity"), "shipping_usd": item.get("shipping_usd"),
+                     "region": region}
             await capture_observation(
                 domain="hardware", metric="asic_price",
                 subject_id=f"{model}|{provider}|{region or 'global'}|{condition}",
@@ -201,49 +221,40 @@ async def refresh_hardware_offers(_db=None) -> Dict:
                 source_reference=str(item.get("source_reference") or url),
                 observed_at=observed_at, region=region,
                 methodology="Normalized observed hardware market offer",
-                raw_snapshot_ref=snapshot_ref, extra=extra, _db=db,
+                raw_snapshot_ref=snapshot, extra=extra, _db=db,
             )
-            if item.get("hashrate_ths") is not None:
-                await capture_observation(
-                    domain="hardware", metric="asic_hashrate", subject_id=model,
-                    value=float(item["hashrate_ths"]), unit="ths",
-                    state=E.OBSERVED_LIVE, provider=provider, source_type=source_type,
-                    source_reference=str(item.get("source_reference") or url),
-                    observed_at=observed_at, region=region,
-                    methodology="Hardware offer/spec observation",
-                    raw_snapshot_ref=snapshot_ref, extra={"model": model}, _db=db,
-                )
-            if item.get("power_watts") is not None:
-                await capture_observation(
-                    domain="hardware", metric="asic_power", subject_id=model,
-                    value=float(item["power_watts"]), unit="watts",
-                    state=E.OBSERVED_LIVE, provider=provider, source_type=source_type,
-                    source_reference=str(item.get("source_reference") or url),
-                    observed_at=observed_at, region=region,
-                    methodology="Hardware offer/spec observation",
-                    raw_snapshot_ref=snapshot_ref, extra={"model": model}, _db=db,
-                )
+            for metric, field, unit in (("asic_hashrate", "hashrate_ths", "ths"),
+                                        ("asic_power", "power_watts", "watts")):
+                if item.get(field) is not None:
+                    await capture_observation(
+                        domain="hardware", metric=metric, subject_id=model,
+                        value=float(item[field]), unit=unit, state=E.OBSERVED_LIVE,
+                        provider=provider, source_type=source_type,
+                        source_reference=str(item.get("source_reference") or url),
+                        observed_at=observed_at, region=region,
+                        methodology="Observed hardware offer/specification",
+                        raw_snapshot_ref=snapshot, extra={"model": model}, _db=db,
+                    )
             count += 1
         return {"configured": True, "observed": count, "status": "ok"}
     except Exception as exc:
         return {"configured": True, "observed": 0, "status": "degraded", "error": str(exc)}
 
 
-async def refresh_compute_offers(_db=None) -> Dict:
+async def refresh_compute_offers(_db=None, *, force: bool = False) -> Dict:
     db = _db or get_db()
     await seed_reference_catalogs(db)
     url = getattr(settings, "GPU_OFFERS_URL", "")
     if not url:
         return {"configured": False, "observed": 0, "status": "reference_only"}
+    if not force and not await _refresh_slot("compute", COMPUTE_REFRESH_SECONDS):
+        return {"configured": True, "observed": 0, "status": "fresh_cached"}
 
     provider_default = getattr(settings, "GPU_PROVIDER_ID", "gpu_feed")
     try:
         payload = await _fetch_json(url)
-        observed = _now()
-        snapshot_ref = await _store_snapshot(
-            domain="gpu", provider=provider_default, source_reference=url,
-            payload=payload, observed_at=observed, _db=db,
-        )
+        snapshot = await _store_snapshot(domain="gpu", provider=provider_default,
+                                         source_reference=url, payload=payload, _db=db)
         count = 0
         for item in _items(payload, "offers"):
             model = str(item.get("gpu_model") or item.get("model") or "").strip()
@@ -254,16 +265,10 @@ async def refresh_compute_offers(_db=None) -> Dict:
             region = str(item.get("region") or "global")
             billing = str(item.get("billing_model") or item.get("market") or "on_demand")
             observed_at = _parse_dt(item.get("observed_at"))
-            extra = {
-                "gpu_model": model,
-                "gpu_count": item.get("gpu_count"),
-                "region": region,
-                "billing_model": billing,
-                "availability": item.get("availability"),
-                "minimum_commitment": item.get("minimum_commitment"),
-                "vram_gb": item.get("vram_gb"),
-                "power_kw": item.get("power_kw"),
-            }
+            extra = {"gpu_model": model, "gpu_count": item.get("gpu_count"), "region": region,
+                     "billing_model": billing, "availability": item.get("availability"),
+                     "minimum_commitment": item.get("minimum_commitment"),
+                     "vram_gb": item.get("vram_gb"), "power_kw": item.get("power_kw")}
             await capture_observation(
                 domain="gpu", metric="compute_offer",
                 subject_id=f"{model}|{provider}|{region}|{billing}",
@@ -272,67 +277,54 @@ async def refresh_compute_offers(_db=None) -> Dict:
                 source_reference=str(item.get("source_reference") or url),
                 observed_at=observed_at, region=region,
                 methodology="Normalized observed GPU compute offer",
-                raw_snapshot_ref=snapshot_ref, extra=extra, _db=db,
+                raw_snapshot_ref=snapshot, extra=extra, _db=db,
             )
-            if item.get("capex_usd") is not None:
-                await capture_observation(
-                    domain="gpu", metric="gpu_capex", subject_id=model,
-                    value=float(item["capex_usd"]), unit="usd", state=E.OBSERVED_LIVE,
-                    provider=provider, source_type="live_api",
-                    source_reference=str(item.get("source_reference") or url),
-                    observed_at=observed_at, region=region,
-                    methodology="Observed GPU hardware offer",
-                    raw_snapshot_ref=snapshot_ref, extra={"gpu_model": model}, _db=db,
-                )
-            if item.get("power_kw") is not None:
-                await capture_observation(
-                    domain="gpu", metric="gpu_power", subject_id=model,
-                    value=float(item["power_kw"]), unit="kw", state=E.OBSERVED_LIVE,
-                    provider=provider, source_type="live_api",
-                    source_reference=str(item.get("source_reference") or url),
-                    observed_at=observed_at, region=region,
-                    methodology="Observed/provider GPU power specification",
-                    raw_snapshot_ref=snapshot_ref, extra={"gpu_model": model}, _db=db,
-                )
+            for metric, field, unit in (("gpu_capex", "capex_usd", "usd"),
+                                        ("gpu_power", "power_kw", "kw")):
+                if item.get(field) is not None:
+                    await capture_observation(
+                        domain="gpu", metric=metric, subject_id=model,
+                        value=float(item[field]), unit=unit, state=E.OBSERVED_LIVE,
+                        provider=provider, source_type="live_api",
+                        source_reference=str(item.get("source_reference") or url),
+                        observed_at=observed_at, region=region,
+                        methodology="Observed GPU hardware/specification",
+                        raw_snapshot_ref=snapshot, extra={"gpu_model": model}, _db=db,
+                    )
             count += 1
         return {"configured": True, "observed": count, "status": "ok"}
     except Exception as exc:
         return {"configured": True, "observed": 0, "status": "degraded", "error": str(exc)}
 
 
-async def refresh_energy_prices(_db=None) -> Dict:
+async def refresh_energy_prices(_db=None, *, force: bool = False) -> Dict:
     db = _db or get_db()
     url = getattr(settings, "ENERGY_PRICES_URL", "")
     if not url:
         return {"configured": False, "observed": 0, "status": "unconfigured"}
+    if not force and not await _refresh_slot("energy", ENERGY_REFRESH_SECONDS):
+        return {"configured": True, "observed": 0, "status": "fresh_cached"}
 
     provider_default = getattr(settings, "ENERGY_PROVIDER_ID", "energy_feed")
     try:
         payload = await _fetch_json(url)
-        observed = _now()
-        snapshot_ref = await _store_snapshot(
-            domain="energy", provider=provider_default, source_reference=url,
-            payload=payload, observed_at=observed, _db=db,
-        )
+        snapshot = await _store_snapshot(domain="energy", provider=provider_default,
+                                         source_reference=url, payload=payload, _db=db)
         count = 0
         for item in _items(payload, "prices"):
             region = str(item.get("region") or item.get("node") or "unknown")
             price_type = str(item.get("price_type") or "wholesale")
-            raw_kwh = item.get("price_usd_kwh")
-            raw_mwh = item.get("price_usd_mwh")
+            raw_kwh, raw_mwh = item.get("price_usd_kwh"), item.get("price_usd_mwh")
             if raw_kwh is None and raw_mwh is None:
                 continue
             price_kwh = float(raw_kwh) if raw_kwh is not None else float(raw_mwh) / 1000.0
             provider = str(item.get("provider") or provider_default)
             observed_at = _parse_dt(item.get("observed_at"))
             source_type = price_type if price_type in {"wholesale", "tariff", "contract"} else "live_api"
-            extra = {
-                "region": region,
-                "price_type": price_type,
-                "demand_charge_usd_kw": item.get("demand_charge_usd_kw"),
-                "time_window": item.get("time_window"),
-                "delivered_operator_cost": bool(item.get("delivered_operator_cost", False)),
-            }
+            extra = {"region": region, "price_type": price_type,
+                     "demand_charge_usd_kw": item.get("demand_charge_usd_kw"),
+                     "time_window": item.get("time_window"),
+                     "delivered_operator_cost": bool(item.get("delivered_operator_cost", False))}
             await capture_observation(
                 domain="energy", metric="power_price",
                 subject_id=f"{region}|{price_type}|{provider}",
@@ -340,8 +332,8 @@ async def refresh_energy_prices(_db=None) -> Dict:
                 provider=provider, source_type=source_type,
                 source_reference=str(item.get("source_reference") or url),
                 observed_at=observed_at, region=region,
-                methodology="Normalized observed energy price; wholesale is not automatically operator delivered cost",
-                raw_snapshot_ref=snapshot_ref, extra=extra, _db=db,
+                methodology="Observed energy price; wholesale is not operator delivered cost",
+                raw_snapshot_ref=snapshot, extra=extra, _db=db,
             )
             count += 1
         return {"configured": True, "observed": count, "status": "ok"}
@@ -349,12 +341,13 @@ async def refresh_energy_prices(_db=None) -> Dict:
         return {"configured": True, "observed": 0, "status": "degraded", "error": str(exc)}
 
 
-async def refresh_all(_db=None) -> Dict:
+async def refresh_all(_db=None, *, force: bool = False) -> Dict:
     db = _db or get_db()
-    hardware = await refresh_hardware_offers(db)
-    compute = await refresh_compute_offers(db)
-    energy = await refresh_energy_prices(db)
-    return {"hardware": hardware, "compute": compute, "energy": energy}
+    return {
+        "hardware": await refresh_hardware_offers(db, force=force),
+        "compute": await refresh_compute_offers(db, force=force),
+        "energy": await refresh_energy_prices(db, force=force),
+    }
 
 
 async def _query_product_facts(
@@ -390,14 +383,12 @@ async def resolve_hardware_bundle(
 ) -> Dict:
     db = _db or get_db()
     await refresh_hardware_offers(db)
-
     if explicit_price is not None:
         await capture_observation(
             domain="hardware", metric="asic_price", subject_id=f"{model}|user_input",
             value=float(explicit_price), unit="usd", state=E.USER_ASSUMPTION,
             provider="user_input", source_type="user_input", user_id=user_id,
-            methodology="Operator-supplied ASIC purchase/reference price",
-            extra={"model": model}, _db=db,
+            methodology="Operator-supplied ASIC price", extra={"model": model}, _db=db,
         )
     if explicit_hashrate is not None:
         await capture_observation(
@@ -413,19 +404,15 @@ async def resolve_hardware_bundle(
             provider="user_input", source_type="user_input", user_id=user_id,
             methodology="Operator-supplied ASIC power", extra={"model": model}, _db=db,
         )
-
-    prices = await _query_product_facts(
-        domain="hardware", metric="asic_price", user_id=user_id,
-        product_key="model", product_value=model, _db=db,
-    )
-    price = _resolve_candidates(prices, explicit=explicit_price is not None)
-    hashrate = await resolve_metric(
-        domain="hardware", metric="asic_hashrate", subject_id=model, user_id=user_id, _db=db,
-    )
-    power = await resolve_metric(
-        domain="hardware", metric="asic_power", subject_id=model, user_id=user_id, _db=db,
-    )
-    return {"price": price, "hashrate": hashrate, "power": power}
+    prices = await _query_product_facts(domain="hardware", metric="asic_price", user_id=user_id,
+                                        product_key="model", product_value=model, _db=db)
+    return {
+        "price": _resolve_candidates(prices, explicit=explicit_price is not None),
+        "hashrate": await resolve_metric(domain="hardware", metric="asic_hashrate", subject_id=model,
+                                         user_id=user_id, _db=db),
+        "power": await resolve_metric(domain="hardware", metric="asic_power", subject_id=model,
+                                      user_id=user_id, _db=db),
+    }
 
 
 async def resolve_compute_bundle(
@@ -436,19 +423,16 @@ async def resolve_compute_bundle(
 ) -> Dict:
     db = _db or get_db()
     await refresh_compute_offers(db)
-
     if explicit_capex is not None:
         await capture_observation(
-            domain="gpu", metric="gpu_capex", subject_id=model,
-            value=float(explicit_capex), unit="usd", state=E.USER_ASSUMPTION,
-            provider="user_input", source_type="user_input", user_id=user_id,
+            domain="gpu", metric="gpu_capex", subject_id=model, value=float(explicit_capex), unit="usd",
+            state=E.USER_ASSUMPTION, provider="user_input", source_type="user_input", user_id=user_id,
             methodology="Operator-supplied GPU capex", extra={"gpu_model": model}, _db=db,
         )
     if explicit_power_kw is not None:
         await capture_observation(
-            domain="gpu", metric="gpu_power", subject_id=model,
-            value=float(explicit_power_kw), unit="kw", state=E.USER_ASSUMPTION,
-            provider="user_input", source_type="user_input", user_id=user_id,
+            domain="gpu", metric="gpu_power", subject_id=model, value=float(explicit_power_kw), unit="kw",
+            state=E.USER_ASSUMPTION, provider="user_input", source_type="user_input", user_id=user_id,
             methodology="Operator-supplied GPU power", extra={"gpu_model": model}, _db=db,
         )
     if explicit_cloud_rate is not None:
@@ -458,29 +442,26 @@ async def resolve_compute_bundle(
             value=float(explicit_cloud_rate), unit="usd_gpu_hr", state=E.USER_ASSUMPTION,
             provider="user_input", source_type="user_input", user_id=user_id, region=region,
             methodology="Operator-supplied cloud compute price",
-            extra={"gpu_model": model, "region": region or "global", "billing_model": billing_model or "on_demand"},
-            _db=db,
+            extra={"gpu_model": model, "region": region or "global",
+                   "billing_model": billing_model or "on_demand"}, _db=db,
         )
-
-    capex = await resolve_metric(domain="gpu", metric="gpu_capex", subject_id=model, user_id=user_id, _db=db)
-    power = await resolve_metric(domain="gpu", metric="gpu_power", subject_id=model, user_id=user_id, _db=db)
     offers = await _query_product_facts(
         domain="gpu", metric="compute_offer", user_id=user_id,
         product_key="gpu_model", product_value=model, region=region,
         billing_model=billing_model, _db=db,
     )
-    offer = _resolve_candidates(offers, explicit=explicit_cloud_rate is not None)
-    return {"capex": capex, "power": power, "cloud_offer": offer}
+    return {
+        "capex": await resolve_metric(domain="gpu", metric="gpu_capex", subject_id=model, user_id=user_id, _db=db),
+        "power": await resolve_metric(domain="gpu", metric="gpu_power", subject_id=model, user_id=user_id, _db=db),
+        "cloud_offer": _resolve_candidates(offers, explicit=explicit_cloud_rate is not None),
+    }
 
 
-async def resolve_energy_market(
-    user_id: Optional[str], *, region: Optional[str] = None, _db=None,
-) -> Dict:
+async def resolve_energy_market(user_id: Optional[str], *, region: Optional[str] = None, _db=None) -> Dict:
     db = _db or get_db()
     await refresh_energy_prices(db)
-    facts = await _query_product_facts(
-        domain="energy", metric="power_price", user_id=user_id, region=region, _db=db,
-    )
+    facts = await _query_product_facts(domain="energy", metric="power_price", user_id=user_id,
+                                       region=region, _db=db)
     return _resolve_candidates(facts)
 
 
@@ -508,12 +489,16 @@ async def list_compute_offers(
 async def list_energy_prices(user_id: Optional[str], *, region: Optional[str] = None, _db=None) -> Dict:
     db = _db or get_db()
     refresh = await refresh_energy_prices(db)
-    facts = await _query_product_facts(
-        domain="energy", metric="power_price", user_id=user_id, region=region, _db=db,
-    )
+    facts = await _query_product_facts(domain="energy", metric="power_price", user_id=user_id,
+                                       region=region, _db=db)
     return {
-        "refresh": refresh,
-        "count": len(facts),
-        "prices": [_public_fact(f) for f in facts],
-        "warning": "Wholesale market power price is context, not automatically the operator's delivered electricity cost.",
+        "refresh": refresh, "count": len(facts), "prices": [_public_fact(f) for f in facts],
+        "warning": "Wholesale power price is market context, not automatically the operator delivered cost.",
     }
+
+
+async def close_infrastructure_cache() -> None:
+    global _redis
+    if _redis is not None:
+        await _redis.aclose()
+        _redis = None
