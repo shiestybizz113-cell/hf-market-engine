@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
+import { useEffect, useState, type ChangeEvent } from 'react'
 import {
   Activity, AlertTriangle, Bitcoin, Box, Brain, Cpu, Database, Eye,
-  FileText, Landmark, Layers, Plus, RefreshCw, Server, Shield, Target,
+  FileText, Landmark, Layers, LockKeyhole, Plus, RefreshCw, Server, Target,
   TrendingUp, X, Zap,
 } from 'lucide-react'
 import {
-  createAsset, getAssetSummary, getAssets, getComputeOffers, getEnergyPrices,
-  getEvidenceGraph, getHardwareOffers, retireAsset, runCapitalAllocation,
-  runCapitalOptimize, runCapitalScenarios,
+  createAsset, getAssetSummary, getAssets, getBillingMe, getComputeOffers,
+  getEnergyPrices, getEvidenceGraph, getHardwareOffers, retireAsset,
+  runCapitalAllocation, runCapitalOptimize, runCapitalScenarios,
 } from '../services/api'
 
 const RISK_PROFILES = ['conservative', 'balanced', 'aggressive']
@@ -95,6 +95,8 @@ export default function Capital() {
   const [infra, setInfra] = useState<any>({ hardware: null, compute: null, energy: null })
   const [assets, setAssets] = useState<any[]>([])
   const [owned, setOwned] = useState<any>(null)
+  const [fleetEntitled, setFleetEntitled] = useState(false)
+  const [planName, setPlanName] = useState('')
   const [assetOpen, setAssetOpen] = useState(false)
   const [assetForm, setAssetForm] = useState<any>({ asset_type: 'asic', subject: 'S21 Pro', units: 1, value_usd: 0 })
 
@@ -105,15 +107,32 @@ export default function Capital() {
 
   async function loadInfra() {
     const settled = await Promise.allSettled([
-      getHardwareOffers(), getComputeOffers(), getEnergyPrices(), getAssets(), getAssetSummary(),
+      getHardwareOffers(), getComputeOffers(), getEnergyPrices(), getBillingMe(),
     ])
-    const value = (i: number) => settled[i].status === 'fulfilled' ? (settled[i] as PromiseFulfilledResult<any>).value.data : null
+    const value = (i: number) => settled[i].status === 'fulfilled'
+      ? (settled[i] as PromiseFulfilledResult<any>).value.data : null
+
     setInfra({ hardware: value(0), compute: value(1), energy: value(2) })
-    setAssets(value(3)?.assets || [])
-    setOwned(value(4) || null)
+    const billing = value(3)
+    const entitled = Boolean(billing?.features?.includes('mining_fleet'))
+    setFleetEntitled(entitled)
+    setPlanName(billing?.plan_name || billing?.plan || '')
+
+    if (!entitled) {
+      setAssets([])
+      setOwned(null)
+      setAssetOpen(false)
+      return
+    }
+
+    const fleet = await Promise.allSettled([getAssets(), getAssetSummary()])
+    const assetsResult = fleet[0].status === 'fulfilled' ? fleet[0].value.data : null
+    const summaryResult = fleet[1].status === 'fulfilled' ? fleet[1].value.data : null
+    setAssets(assetsResult?.assets || [])
+    setOwned(summaryResult || null)
   }
 
-  useEffect(() => { loadInfra() }, [])
+  useEffect(() => { void loadInfra() }, [])
 
   async function execute() {
     setLoading(true); setError(null)
@@ -145,6 +164,7 @@ export default function Capital() {
   }
 
   async function addAsset() {
+    if (!fleetEntitled) return
     setError(null)
     try {
       await createAsset(assetForm)
@@ -157,6 +177,7 @@ export default function Capital() {
   }
 
   async function retire(id: string) {
+    if (!fleetEntitled) return
     try { await retireAsset(id); await loadInfra() }
     catch (err: any) { setError(err.response?.data?.detail || 'Could not retire asset') }
   }
@@ -183,13 +204,13 @@ export default function Capital() {
             <span className="badge badge-blue">V2 EVIDENCE FABRIC</span>
           </div>
           <p className="muted" style={{ fontSize: 12, maxWidth: 900 }}>
-            Markets + mining + compute + energy + owned fleet on one capital frame. Evidence before recommendation.
-            Optimizer proposes only; there is no trade, spend, or deployment action on this surface.
+            Markets + mining + compute + energy on one capital frame. Advanced+ can include persistent owned-fleet state.
+            Evidence before recommendation. Optimizer proposes only; there is no trade, spend, or deployment action here.
           </p>
         </div>
         <div className="flex gap-8">
-          <button className="btn" onClick={loadInfra}><RefreshCw size={13} /> Refresh data</button>
-          <button className="btn btn-primary" onClick={execute} disabled={loading}>
+          <button className="btn" onClick={() => void loadInfra()}><RefreshCw size={13} /> Refresh data</button>
+          <button className="btn btn-primary" onClick={() => void execute()} disabled={loading}>
             {loading ? <RefreshCw size={13} className="spin" /> : <Target size={13} />} Run
           </button>
         </div>
@@ -200,8 +221,9 @@ export default function Capital() {
       </div>}
 
       <ProviderStrip infra={infra} />
-      <OwnedAssets assets={assets} owned={owned} assetOpen={assetOpen} setAssetOpen={setAssetOpen}
-        assetForm={assetForm} setAssetForm={setAssetForm} addAsset={addAsset} retire={retire} />
+      <OwnedAssets assets={assets} owned={owned} entitled={fleetEntitled} planName={planName}
+        assetOpen={assetOpen} setAssetOpen={setAssetOpen} assetForm={assetForm} setAssetForm={setAssetForm}
+        addAsset={addAsset} retire={retire} />
 
       <div className="panel mb-8">
         <div className="panel-header">
@@ -263,10 +285,22 @@ function ProviderStrip({ infra }: { infra: any }) {
   </div>
 }
 
-function OwnedAssets({ assets, owned, assetOpen, setAssetOpen, assetForm, setAssetForm, addAsset, retire }: any) {
+function OwnedAssets({ assets, owned, entitled, planName, assetOpen, setAssetOpen, assetForm, setAssetForm, addAsset, retire }: any) {
   const assetType = assetForm.asset_type
   const change = (k: string) => (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setAssetForm((p: any) => ({ ...p, [k]: e.target.type === 'number' ? Number(e.target.value) : e.target.value }))
+
+  if (!entitled) {
+    return <div className="panel mb-8" style={{ borderColor: 'var(--amber)' }}>
+      <div className="panel-header">
+        <span className="panel-title"><LockKeyhole size={14} /> Persistent owned-fleet modeling</span>
+        <span className="badge badge-amber">ADVANCED+</span>
+      </div>
+      <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+        Your {planName || 'current'} plan can run Capital Allocation now. Advanced+ adds persistent ASIC/GPU/power/storage/treasury inventory so the optimizer accounts for assets you already own before proposing new capital.
+      </p>
+    </div>
+  }
 
   return <div className="panel mb-8">
     <div className="panel-header">
