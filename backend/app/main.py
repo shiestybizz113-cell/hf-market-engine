@@ -1,9 +1,15 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import uuid
 from contextlib import asynccontextmanager
-from app.core.database import connect_to_mongo, close_mongo_connection
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.api import (
+    auth, billing, capital, decision, evidence, execution, infrastructure,
+    journal, market, mining, system, trading,
+)
 from app.core.config import settings
-from app.api import auth, market, trading, system, execution, journal, billing, evidence, mining, decision, capital
+from app.core.database import close_mongo_connection, connect_to_mongo, get_db
 
 
 @asynccontextmanager
@@ -16,12 +22,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="hf-market-engine",
     description=(
-        "AI Trading Intelligence OS for Crypto, Stocks, ETFs, Forex, Macro & DeFi.\n\n"
-        "Research, simulation and AI-assisted analysis only. "
-        "Not financial advice. Does not guarantee profits. "
-        "Trading involves substantial risk."
+        "Capital + Compute Intelligence Infrastructure. Evidence-backed market, "
+        "mining, compute, energy and capital-allocation research. Read-only; "
+        "the Capital optimizer proposes and never executes."
     ),
-    version="0.1.0-phase1",
+    version="0.2.0-capital-v2",
     lifespan=lifespan,
 )
 
@@ -34,7 +39,6 @@ if settings.cors_origin_list:
         allow_headers=["*"],
     )
 else:
-    # Development fallback only — main.py refuses to start without CORS_ORIGINS in production.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -42,6 +46,17 @@ else:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+
+@app.middleware("http")
+async def request_identity(request: Request, call_next):
+    """Give every public request a traceable ID without storing request bodies."""
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(market.router, prefix="/api")
@@ -54,22 +69,49 @@ app.include_router(evidence.router, prefix="/api")
 app.include_router(mining.router, prefix="/api")
 app.include_router(decision.router, prefix="/api")
 app.include_router(capital.router, prefix="/api")
+app.include_router(infrastructure.router, prefix="/api")
 
 
 @app.get("/")
 async def root():
     return {
         "product": "hf-market-engine",
-        "tagline": "AI Trading Intelligence OS",
-        "phase": "1 – Research & Simulation",
+        "tagline": "Capital + Compute Intelligence Infrastructure",
+        "phase": "Capital Command Center V2",
+        "read_only": True,
         "disclaimer": (
-            "This platform provides market research, simulation, and AI-assisted analysis. "
-            "It is not financial advice and does not guarantee profits. "
-            "Trading crypto, stocks, ETFs, forex and other assets involves substantial risk."
+            "Research, simulation and AI-assisted capital intelligence. Not financial "
+            "advice. The Capital optimizer proposes only and cannot trade, spend or deploy."
         ),
+    }
+
+
+@app.get("/api/live")
+async def liveness():
+    return {"status": "ok", "service": settings.APP_NAME}
+
+
+@app.get("/api/ready")
+async def readiness():
+    try:
+        await get_db().command("ping")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {
+        "status": "ready",
+        "service": settings.APP_NAME,
+        "market_data_mode": settings.MARKET_DATA_MODE,
     }
 
 
 @app.get("/api/health")
 async def api_health():
-    return {"status": "ok", "service": settings.APP_NAME}
+    """Compatibility health route; now checks the shared datastore."""
+    try:
+        await get_db().command("ping")
+        database = "ok"
+    except Exception:
+        database = "error"
+    if database != "ok":
+        raise HTTPException(status_code=503, detail={"status": "degraded", "database": database})
+    return {"status": "ok", "service": settings.APP_NAME, "database": database}
