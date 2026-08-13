@@ -11,9 +11,14 @@
 {$APP_DOMAIN:localhost} {
 	encode gzip zstd
 
-	# API
+	# API. Overwrite client-IP provenance at the trusted edge so application
+	# rate limits cannot be bypassed with a spoofed X-Forwarded-For header.
 	handle /api/* {
-		reverse_proxy backend:8000
+		reverse_proxy backend:8000 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host {host}
+		}
 	}
 
 	# Static SPA
@@ -27,6 +32,7 @@
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 	}
 
 	log {
