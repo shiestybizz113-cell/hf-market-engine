@@ -11,6 +11,7 @@ from app.core.infrastructure_data import (
     list_energy_prices,
     list_hardware_offers,
 )
+from app.core.plans import require_feature
 
 router = APIRouter(tags=["capital-infrastructure"])
 
@@ -40,8 +41,12 @@ async def energy_prices(
     return await list_energy_prices(current_user["_id"], region=region)
 
 
+# Persistent operator/fleet state is the Advanced+ fleet-modeling entitlement.
 @router.post("/assets", status_code=201)
-async def create_asset(payload: Dict[str, Any], current_user=Depends(get_current_user)):
+async def create_asset(
+    payload: Dict[str, Any],
+    current_user=Depends(require_feature("mining_fleet")),
+):
     try:
         return await assets.create_asset(payload, current_user["_id"])
     except (ValueError, TypeError) as exc:
@@ -51,14 +56,14 @@ async def create_asset(payload: Dict[str, Any], current_user=Depends(get_current
 @router.get("/assets")
 async def get_assets(
     active_only: bool = Query(default=False),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_feature("mining_fleet")),
 ):
     rows = await assets.list_assets(current_user["_id"], active_only=active_only)
     return {"count": len(rows), "assets": rows}
 
 
 @router.get("/assets/summary")
-async def asset_summary(current_user=Depends(get_current_user)):
+async def asset_summary(current_user=Depends(require_feature("mining_fleet"))):
     return await assets.fleet_summary(current_user["_id"])
 
 
@@ -66,7 +71,7 @@ async def asset_summary(current_user=Depends(get_current_user)):
 async def patch_asset(
     asset_id: str,
     payload: Dict[str, Any],
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_feature("mining_fleet")),
 ):
     try:
         row = await assets.update_asset(asset_id, payload, current_user["_id"])
@@ -78,7 +83,10 @@ async def patch_asset(
 
 
 @router.post("/assets/import")
-async def import_assets(payload: Dict[str, Any], current_user=Depends(get_current_user)):
+async def import_assets(
+    payload: Dict[str, Any],
+    current_user=Depends(require_feature("mining_fleet")),
+):
     try:
         return await assets.import_assets(payload, current_user["_id"])
     except (ValueError, TypeError) as exc:
@@ -86,7 +94,10 @@ async def import_assets(payload: Dict[str, Any], current_user=Depends(get_curren
 
 
 @router.post("/assets/{asset_id}/retire")
-async def retire_asset(asset_id: str, current_user=Depends(get_current_user)):
+async def retire_asset(
+    asset_id: str,
+    current_user=Depends(require_feature("mining_fleet")),
+):
     row = await assets.retire_asset(asset_id, current_user["_id"])
     if not row:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -94,7 +105,10 @@ async def retire_asset(asset_id: str, current_user=Depends(get_current_user)):
 
 
 @router.post("/assets/{asset_id}/reactivate")
-async def reactivate_asset(asset_id: str, current_user=Depends(get_current_user)):
+async def reactivate_asset(
+    asset_id: str,
+    current_user=Depends(require_feature("mining_fleet")),
+):
     row = await assets.reactivate_asset(asset_id, current_user["_id"])
     if not row:
         raise HTTPException(status_code=404, detail="Asset not found")
