@@ -19,6 +19,22 @@ def _public_fact(doc: dict) -> dict:
     return out
 
 
+def _public_snapshot(doc: dict) -> dict:
+    """Proof metadata only — never expose the raw vendor/provider payload."""
+    return {
+        "id": doc.get("snapshot_id") or doc.get("_id"),
+        "snapshot_id": doc.get("snapshot_id") or doc.get("_id"),
+        "domain": doc.get("domain"),
+        "provider": doc.get("provider"),
+        "source_reference": doc.get("source_reference"),
+        "observed_at": doc.get("observed_at"),
+        "ingested_at": doc.get("ingested_at"),
+        "sha256": doc.get("sha256"),
+        "raw_bytes": doc.get("raw_bytes"),
+        "payload_truncated": doc.get("payload_truncated", False),
+    }
+
+
 @router.get("/receipts")
 async def list_receipts(
     limit: int = 20,
@@ -114,9 +130,9 @@ async def proof_graph(receipt_id: str, current_user=Depends(get_current_user)):
             continue
         snap = await db.provider_snapshots.find_one({"_id": snapshot_id})
         if snap:
-            snap["id"] = snap.pop("_id")
-            snapshot_by_id[snapshot_id] = snap
-            snapshots.append(snap)
+            public_snap = _public_snapshot(snap)
+            snapshot_by_id[snapshot_id] = public_snap
+            snapshots.append(public_snap)
 
     nodes = [{
         "kind": "receipt",
@@ -198,6 +214,8 @@ async def proof_graph(receipt_id: str, current_user=Depends(get_current_user)):
                         "provider": snap.get("provider"),
                         "sha256": snap.get("sha256"),
                         "observed_at": snap.get("observed_at"),
+                        "raw_bytes": snap.get("raw_bytes"),
+                        "payload_truncated": snap.get("payload_truncated"),
                     })
                 edges.append({"from": source_id, "to": snapshot_node, "relation": "captured_in"})
 
@@ -208,9 +226,10 @@ async def proof_graph(receipt_id: str, current_user=Depends(get_current_user)):
         "snapshots": snapshots,
         "graph": {"nodes": nodes, "edges": edges},
         "proof_contract": {
-            "path": "receipt -> lane -> immutable evidence fact -> source/provider -> raw snapshot",
+            "path": "receipt -> lane -> immutable evidence fact -> source/provider -> snapshot hash",
             "immutable_facts": True,
             "losing_sources_preserved": True,
+            "raw_provider_payload_public": False,
             "user_scope": "global facts + requesting user's facts only",
         },
     }
