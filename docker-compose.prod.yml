@@ -1,12 +1,12 @@
-# Production deployment for hf-market-engine.
+# Production deployment for hf-market-engine Capital Command Center V2.
 #
-#   cp .env.example .env          # fill in secrets + APP_DOMAIN
+#   cp .env.example .env
+#   # fill APP_DOMAIN + secrets + provider feeds
+#   docker compose -f docker-compose.prod.yml config
 #   docker compose -f docker-compose.prod.yml up -d --build
 #
-# Edge:  Caddy (ports 80/443) -> TLS termination
-#        /api/* -> backend:8000,  /* -> frontend:80 (static SPA)
-# No host ports exposed for mongo / backend / frontend.
-# All secrets come from .env (never hardcoded).
+# Edge: Caddy :80/:443 -> /api/* backend, /* frontend.
+# Mongo/Redis/backend/frontend are private to the compose network.
 
 services:
   mongo:
@@ -29,18 +29,29 @@ services:
       retries: 10
       start_period: 20s
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile.prod
     restart: unless-stopped
+    init: true
     environment:
       ENVIRONMENT: production
       SECRET_KEY: ${SECRET_KEY}
       MONGODB_URL: mongodb://${MONGO_APP_USER}:${MONGO_APP_PASSWORD}@mongo:27017/${MONGODB_DB}?authSource=admin
       MONGODB_DB: ${MONGODB_DB}
       CORS_ORIGINS: ${CORS_ORIGINS}
-      APP_WORKERS: ${APP_WORKERS:-1}
+      APP_WORKERS: ${APP_WORKERS:-2}
       COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
       POLYGON_API_KEY: ${POLYGON_API_KEY:-}
       ALPACA_API_KEY: ${ALPACA_API_KEY:-}
@@ -48,6 +59,14 @@ services:
       TWELVE_DATA_API_KEY: ${TWELVE_DATA_API_KEY:-}
       FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
       MARKET_DATA_MODE: ${MARKET_DATA_MODE:-demo}
+      HARDWARE_OFFERS_URL: ${HARDWARE_OFFERS_URL:-}
+      HARDWARE_PROVIDER_ID: ${HARDWARE_PROVIDER_ID:-hardware_feed}
+      GPU_OFFERS_URL: ${GPU_OFFERS_URL:-}
+      GPU_PROVIDER_ID: ${GPU_PROVIDER_ID:-gpu_feed}
+      ENERGY_PRICES_URL: ${ENERGY_PRICES_URL:-}
+      ENERGY_PROVIDER_ID: ${ENERGY_PROVIDER_ID:-energy_feed}
+      INFRA_PROVIDER_BEARER_TOKEN: ${INFRA_PROVIDER_BEARER_TOKEN:-}
+      INFRA_PROVIDER_TIMEOUT: ${INFRA_PROVIDER_TIMEOUT:-10}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GROK_API_KEY: ${GROK_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-}
@@ -55,7 +74,7 @@ services:
       AI_TEMPERATURE: ${AI_TEMPERATURE:-0.4}
       AI_TIMEOUT: ${AI_TIMEOUT:-20}
       AI_CACHE_TTL: ${AI_CACHE_TTL:-900}
-      REDIS_URL: ${REDIS_URL:-redis://localhost:6379}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       STRIPE_PRICE_PRO: ${STRIPE_PRICE_PRO:-}
@@ -67,8 +86,10 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/ready')"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -79,6 +100,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.prod
     restart: unless-stopped
+    init: true
     depends_on:
       backend:
         condition: service_healthy
