@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.auth import get_current_user
 from app.core import evidence as E
 from app.core.database import get_db
+from app.core.redaction import safe_source_reference
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
 
@@ -14,6 +15,7 @@ router = APIRouter(prefix="/evidence", tags=["evidence"])
 def _public_fact(doc: dict) -> dict:
     out = dict(doc)
     out.pop("_id", None)
+    out["source_reference"] = safe_source_reference(out.get("source_reference"))
     out["fresh"] = not E.is_stale(out)
     out["age_seconds"] = round(E.age_seconds(out), 1)
     return out
@@ -26,7 +28,7 @@ def _public_snapshot(doc: dict) -> dict:
         "snapshot_id": doc.get("snapshot_id") or doc.get("_id"),
         "domain": doc.get("domain"),
         "provider": doc.get("provider"),
-        "source_reference": doc.get("source_reference"),
+        "source_reference": safe_source_reference(doc.get("source_reference")),
         "observed_at": doc.get("observed_at"),
         "ingested_at": doc.get("ingested_at"),
         "sha256": doc.get("sha256"),
@@ -195,7 +197,7 @@ async def proof_graph(receipt_id: str, current_user=Depends(get_current_user)):
                 "id": source_id,
                 "provider": provider,
                 "source_type": fact.get("source_type"),
-                "source_reference": fact.get("source_reference"),
+                "source_reference": source_reference,
             })
         edges.append({"from": f"fact:{fact_id}", "to": source_id, "relation": "sourced_from"})
 
@@ -230,6 +232,7 @@ async def proof_graph(receipt_id: str, current_user=Depends(get_current_user)):
             "immutable_facts": True,
             "losing_sources_preserved": True,
             "raw_provider_payload_public": False,
+            "source_credentials_public": False,
             "user_scope": "global facts + requesting user's facts only",
         },
     }
