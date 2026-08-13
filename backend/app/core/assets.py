@@ -1,17 +1,10 @@
-"""
-Customer asset / fleet registry.
+"""Customer asset / fleet registry for Capital Command Center V2.
 
-Asset types:
-    asic      - Bitcoin mining rigs (units, hashrate_ths_per_unit, power_kw_per_unit)
-    gpu       - GPU units (power_kw_per_unit)
-    power     - owned power capacity (power_mw) — site / grid / solar allocation
-    storage   - energy storage (storage_mwh)
-    treasury  - BTC held (btc_qty) or fiat/cash (value_usd)
+Assets are mutable current-state records; their evidence is not. Every create,
+update, retire, or reactivation emits (or reuses) an immutable fleet fact so a
+Capital receipt can reconstruct the operator state it used.
 
-Every asset is linked to an immutable fleet evidence fact so the capital
-engine and the proof drawer can show where "the customer already owns this"
-came from. Assets are NEVER hard-deleted: they are retired (status ->
-retired), which supersedes their fleet fact. We evolve, we don't delete.
+There is intentionally no hard-delete path. Assets retire and history remains.
 """
 
 import uuid
@@ -23,8 +16,10 @@ from app.core.evidence_broker import capture_observation
 from app.core import evidence as E
 
 ASSET_TYPES = ("asic", "gpu", "power", "storage", "treasury")
+ACTIVE = "active"
+RETIRED = "retired"
+STATUSES = (ACTIVE, RETIRED)
 
-# Which fleet metric each asset type contributes to.
 ASSET_METRIC = {
     "asic": "asset_asic",
     "gpu": "asset_gpu",
@@ -33,170 +28,206 @@ ASSET_METRIC = {
     "treasury": "asset_treasury",
 }
 
-ACTIVE = "active"
-RETIRED = "retired"
-STATUSES = (ACTIVE, RETIRED)
+_PATCHABLE = {
+    "name", "subject", "units", "value_usd", "currency", "source", "status",
+    "hashrate_ths_per_unit", "power_kw_per_unit", "power_mw", "storage_mwh",
+    "energy_acquisition_usd_kwh", "btc_qty", "acquisition_date", "region",
+    "notes",
+}
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def normalize_asset(payload: Dict) -> Dict:
-    """Validate + fill an asset document from an API payload."""
-    asset_type = payload.get("asset_type")
+def _clean_number(value, default=0.0) -> float:
+    if value is None or value == "":
+        return float(default)
+    return float(value)
+
+
+def normalize_asset(payload: Dict, *, existing: Optional[Dict] = None) -> Dict:
+    """Validate + normalize an asset payload, optionally merging with a record."""
+    base = dict(existing or {})
+    merged = {**base, **{k: v for k, v in payload.items() if k in _PATCHABLE or k == "asset_type"}}
+
+    asset_type = merged.get("asset_type")
     if asset_type not in ASSET_TYPES:
-        raise ValueError(
-            f"asset_type must be one of {', '.join(ASSET_TYPES)}"
-        )
-    status = payload.get("status", ACTIVE)
+        raise ValueError(f"asset_type must be one of {', '.join(ASSET_TYPES)}")
+
+    status = merged.get("status", ACTIVE)
     if status not in STATUSES:
         raise ValueError(f"status must be one of {', '.join(STATUSES)}")
 
-    units = int(payload.get("units", 1))
+    units = int(merged.get("units", 1))
     if units < 1:
         raise ValueError("units must be >= 1")
 
     doc: Dict = {
         "asset_type": asset_type,
-        "name": payload.get("name") or payload.get("subject") or asset_type,
-        "subject": payload.get("subject") or payload.get("name") or asset_type,
+        "name": merged.get("name") or merged.get("subject") or asset_type,
+        "subject": merged.get("subject") or merged.get("name") or asset_type,
         "units": units,
-        "value_usd": float(payload.get("value_usd", 0.0)),
-        "currency": payload.get("currency", "USD"),
-        "source": payload.get("source", "user_input"),
+        "value_usd": _clean_number(merged.get("value_usd"), 0.0),
+        "currency": merged.get("currency", "USD"),
+        "source": merged.get("source", "user_input"),
         "status": status,
-        "created_at": _now(),
-        "updated_at": _now(),
     }
-    optional = {
-        "hashrate_ths_per_unit": "hashrate_ths_per_unit",
-        "power_kw_per_unit": "power_kw_per_unit",
-        "power_mw": "power_mw",
-        "storage_mwh": "storage_mwh",
-        "energy_acquisition_usd_kwh": "energy_acquisition_usd_kwh",
-        "btc_qty": "btc_qty",
-        "acquisition_date": "acquisition_date",
-        "region": "region",
-        "notes": "notes",
-    }
-    for src, dst in optional.items():
-        if payload.get(src) is not None:
-            doc[dst] = payload[src]
+
+    numeric_optional = (
+        "hashrate_ths_per_unit", "power_kw_per_unit", "power_mw",
+        "storage_mwh", "energy_acquisition_usd_kwh", "btc_qty",
+    )
+    for key in numeric_optional:
+        if merged.get(key) is not None:
+            doc[key] = _clean_number(merged[key])
+
+    for key in ("acquisition_date", "region", "notes"):
+        if merged.get(key) is not None:
+            doc[key] = merged[key]
+
+    if asset_type == "asic":
+        if doc.get("hashrate_ths_per_unit", 0) < 0 or doc.get("power_kw_per_unit", 0) < 0:
+            raise ValueError("ASIC hashrate/power must be >= 0")
+    if asset_type == "gpu" and doc.get("power_kw_per_unit", 0) < 0:
+        raise ValueError("GPU power_kw_per_unit must be >= 0")
+    if asset_type == "power" and doc.get("power_mw", 0) < 0:
+        raise ValueError("power_mw must be >= 0")
+    if asset_type == "storage" and doc.get("storage_mwh", 0) < 0:
+        raise ValueError("storage_mwh must be >= 0")
+
     return doc
 
 
-async def create_asset(payload: Dict, user_id: str, _db=None) -> Dict:
-    """Create an asset AND its immutable fleet fact. Returns the asset doc."""
-    db = _db or get_db()
-    doc = normalize_asset(payload)
-    doc["_id"] = str(uuid.uuid4())
-    doc["user_id"] = user_id
-
-    # Fleet evidence fact (persistent: expires only on change/retire).
-    evidence_id = await _fleet_fact(doc)
-    doc["evidence_id"] = evidence_id
-    await db.assets.insert_one(doc)
-    return doc
+def _public(doc: Dict) -> Dict:
+    out = dict(doc)
+    raw_id = out.pop("_id", None)
+    out["asset_id"] = out.get("asset_id") or raw_id
+    return out
 
 
-async def import_assets(payload: Dict, user_id: str, _db=None) -> Dict:
-    """Bulk import assets. Returns created docs + skipped errors."""
-    items = payload.get("assets", [])
-    if not isinstance(items, list):
-        raise ValueError("assets must be a list")
-    db = _db or get_db()
-    created = []
-    errors = []
-    for i, item in enumerate(items):
-        try:
-            doc = normalize_asset(item)
-            doc["_id"] = str(uuid.uuid4())
-            doc["user_id"] = user_id
-            doc["source"] = item.get("source", "import")
-            evidence_id = await _fleet_fact(doc)
-            doc["evidence_id"] = evidence_id
-            await db.assets.insert_one(doc)
-            created.append(doc)
-        except ValueError as exc:
-            errors.append({"index": i, "error": str(exc)})
-    return {"created": created, "errors": errors}
+def _fact_value_and_unit(doc: Dict) -> tuple[float, str]:
+    asset_type = doc["asset_type"]
+    if doc.get("status") == RETIRED:
+        return 0.0, "retired"
+    if asset_type in ("asic", "gpu"):
+        return float(doc.get("units", 0)), "units"
+    if asset_type == "power":
+        return float(doc.get("power_mw", 0.0)), "mw"
+    if asset_type == "storage":
+        return float(doc.get("storage_mwh", 0.0)), "mwh"
+    btc_qty = float(doc.get("btc_qty", 0.0) or 0.0)
+    if btc_qty:
+        return btc_qty, "btc"
+    return float(doc.get("value_usd", 0.0)), "usd"
 
 
 async def _fleet_fact(doc: Dict, _db=None) -> str:
-    """Append (or reuse) the fleet fact for an asset."""
-    value = float(doc.get("value_usd", 0.0))
+    value, unit = _fact_value_and_unit(doc)
     extra = {
+        "asset_id": doc["asset_id"],
         "asset_type": doc["asset_type"],
-        "units": doc["units"],
+        "units": doc.get("units", 1),
         "name": doc.get("name"),
+        "subject": doc.get("subject"),
+        "status": doc.get("status", ACTIVE),
+        "value_usd": float(doc.get("value_usd", 0.0) or 0.0),
     }
-    for k in ("hashrate_ths_per_unit", "power_kw_per_unit", "power_mw",
-              "storage_mwh", "btc_qty", "energy_acquisition_usd_kwh"):
-        if doc.get(k) is not None:
-            extra[k] = doc[k]
+    for key in (
+        "hashrate_ths_per_unit", "power_kw_per_unit", "power_mw",
+        "storage_mwh", "btc_qty", "energy_acquisition_usd_kwh",
+        "region", "acquisition_date",
+    ):
+        if doc.get(key) is not None:
+            extra[key] = doc[key]
+
     return await capture_observation(
         domain="fleet",
         metric=ASSET_METRIC[doc["asset_type"]],
-        subject_id=doc["_id"],
+        subject_id=doc["asset_id"],
         value=value,
-        unit="usd",
+        unit=unit,
         state=E.USER_ASSUMPTION,
         provider="user_input",
         source_type="user_input",
         user_id=doc.get("user_id"),
-        raw_snapshot_ref=f"asset:{doc['_id']}",
+        raw_snapshot_ref=f"asset:{doc['asset_id']}",
+        methodology="Operator asset registry snapshot",
         extra=extra,
         _db=_db,
     )
 
 
-async def retire_asset(asset_id: str, user_id: str, _db=None) -> Optional[Dict]:
-    """Retire an asset: supersede its fleet fact, keep history. Returns doc."""
+async def create_asset(payload: Dict, user_id: str, _db=None) -> Dict:
     db = _db or get_db()
-    asset = await db.assets.find_one({"_id": asset_id, "user_id": user_id})
-    if not asset:
-        return None
-    if asset.get("status") == RETIRED:
-        return asset
+    normalized = normalize_asset(payload)
+    asset_id = str(uuid.uuid4())
+    now = _now()
+    doc = {
+        **normalized,
+        "_id": asset_id,
+        "asset_id": asset_id,
+        "user_id": user_id,
+        "created_at": now,
+        "updated_at": now,
+    }
+    doc["evidence_id"] = await _fleet_fact(doc, db)
+    await db.assets.insert_one(doc)
+    return _public(doc)
 
-    new_fact_id = await capture_observation(
-        domain="fleet",
-        metric=ASSET_METRIC[asset["asset_type"]],
-        subject_id=asset["_id"],
-        value=0.0,
-        unit="usd",
-        state=E.USER_ASSUMPTION,
-        provider="user_input",
-        source_type="user_input",
-        user_id=user_id,
-        raw_snapshot_ref=f"asset:{asset['_id']}:retired",
-        _db=_db,
-    )
-    await db.assets.update_one(
-        {"_id": asset_id},
-        {"$set": {"status": RETIRED, "updated_at": _now(), "evidence_id": new_fact_id}},
-    )
-    asset["status"] = RETIRED
-    asset["updated_at"] = _now()
-    asset["evidence_id"] = new_fact_id
-    return asset
+
+async def import_assets(payload: Dict, user_id: str, _db=None) -> Dict:
+    items = payload.get("assets", [])
+    if not isinstance(items, list):
+        raise ValueError("assets must be a list")
+    if len(items) > 500:
+        raise ValueError("asset import is limited to 500 rows per request")
+
+    created, errors = [], []
+    for index, item in enumerate(items):
+        try:
+            created.append(await create_asset(item, user_id, _db))
+        except (ValueError, TypeError) as exc:
+            errors.append({"index": index, "error": str(exc)})
+    return {"created": created, "errors": errors, "created_count": len(created)}
+
+
+async def get_asset(asset_id: str, user_id: str, _db=None) -> Optional[Dict]:
+    db = _db or get_db()
+    doc = await db.assets.find_one({"_id": asset_id, "user_id": user_id})
+    return _public(doc) if doc else None
+
+
+async def update_asset(asset_id: str, payload: Dict, user_id: str, _db=None) -> Optional[Dict]:
+    db = _db or get_db()
+    current = await db.assets.find_one({"_id": asset_id, "user_id": user_id})
+    if not current:
+        return None
+
+    if payload.get("asset_type") and payload["asset_type"] != current.get("asset_type"):
+        raise ValueError("asset_type cannot be changed; retire and create a new asset instead")
+
+    normalized = normalize_asset(payload, existing=current)
+    next_doc = {
+        **current,
+        **normalized,
+        "asset_id": asset_id,
+        "user_id": user_id,
+        "updated_at": _now(),
+    }
+    next_doc["evidence_id"] = await _fleet_fact(next_doc, db)
+
+    set_fields = {k: v for k, v in next_doc.items() if k != "_id"}
+    await db.assets.update_one({"_id": asset_id, "user_id": user_id}, {"$set": set_fields})
+    return _public(next_doc)
+
+
+async def retire_asset(asset_id: str, user_id: str, _db=None) -> Optional[Dict]:
+    return await update_asset(asset_id, {"status": RETIRED}, user_id, _db)
 
 
 async def reactivate_asset(asset_id: str, user_id: str, _db=None) -> Optional[Dict]:
-    db = _db or get_db()
-    asset = await db.assets.find_one({"_id": asset_id, "user_id": user_id})
-    if not asset:
-        return None
-    new_fact_id = await _fleet_fact(asset, _db)
-    await db.assets.update_one(
-        {"_id": asset_id},
-        {"$set": {"status": ACTIVE, "updated_at": _now(), "evidence_id": new_fact_id}},
-    )
-    asset["status"] = ACTIVE
-    asset["updated_at"] = _now()
-    asset["evidence_id"] = new_fact_id
-    return asset
+    return await update_asset(asset_id, {"status": ACTIVE}, user_id, _db)
 
 
 async def list_assets(user_id: str, _db=None, active_only: bool = False) -> List[Dict]:
@@ -205,16 +236,13 @@ async def list_assets(user_id: str, _db=None, active_only: bool = False) -> List
     if active_only:
         query["status"] = ACTIVE
     cursor = db.assets.find(query).sort("created_at", -1)
-    out = []
-    async for doc in cursor:
-        doc.pop("_id", None)
-        out.append(doc)
-    return out
+    return [_public(doc) async for doc in cursor]
 
 
 async def fleet_summary(user_id: str, _db=None) -> Dict:
-    """Aggregate active assets into the fleet block the capital engine uses."""
-    assets = await list_assets(user_id, _db, active_only=True)
+    """Aggregate active assets and refresh their evidence snapshot if needed."""
+    db = _db or get_db()
+    assets = await list_assets(user_id, db, active_only=True)
     summary: Dict = {
         "asics": {"units": 0, "hashrate_ths": 0.0, "power_kw": 0.0, "value_usd": 0.0, "models": []},
         "gpus": {"units": 0, "power_kw": 0.0, "value_usd": 0.0, "models": []},
@@ -224,34 +252,56 @@ async def fleet_summary(user_id: str, _db=None) -> Dict:
         "treasury_usd": 0.0,
         "total_value_usd": 0.0,
         "asset_count": len(assets),
+        "evidence_ids": [],
     }
-    for a in assets:
-        summary["total_value_usd"] += float(a.get("value_usd", 0.0))
-        at = a["asset_type"]
-        if at == "asic":
-            h = float(a.get("hashrate_ths_per_unit", 0.0))
-            p = float(a.get("power_kw_per_unit", 0.0))
-            summary["asics"]["units"] += a["units"]
-            summary["asics"]["hashrate_ths"] += h * a["units"]
-            summary["asics"]["power_kw"] += p * a["units"]
-            summary["asics"]["value_usd"] += float(a.get("value_usd", 0.0))
-            summary["asics"]["models"].append(
-                {"model": a.get("subject"), "units": a["units"],
-                 "hashrate_ths": h * a["units"], "power_kw": p * a["units"]}
+
+    for public_asset in assets:
+        internal = {**public_asset, "_id": public_asset["asset_id"]}
+        evidence_id = await _fleet_fact(internal, db)
+        summary["evidence_ids"].append(evidence_id)
+        if evidence_id != public_asset.get("evidence_id"):
+            await db.assets.update_one(
+                {"_id": public_asset["asset_id"], "user_id": user_id},
+                {"$set": {"evidence_id": evidence_id, "updated_at": _now()}},
             )
-        elif at == "gpu":
-            p = float(a.get("power_kw_per_unit", 0.0))
-            summary["gpus"]["units"] += a["units"]
-            summary["gpus"]["power_kw"] += p * a["units"]
-            summary["gpus"]["value_usd"] += float(a.get("value_usd", 0.0))
-            summary["gpus"]["models"].append(
-                {"model": a.get("subject"), "units": a["units"], "power_kw": p * a["units"]}
-            )
-        elif at == "power":
-            summary["power_mw"] += float(a.get("power_mw", 0.0))
-        elif at == "storage":
-            summary["storage_mwh"] += float(a.get("storage_mwh", 0.0))
-        elif at == "treasury":
-            summary["treasury_btc"] += float(a.get("btc_qty", 0.0))
-            summary["treasury_usd"] += float(a.get("value_usd", 0.0))
+
+        value_usd = float(public_asset.get("value_usd", 0.0) or 0.0)
+        summary["total_value_usd"] += value_usd
+        asset_type = public_asset["asset_type"]
+        units = int(public_asset.get("units", 1))
+
+        if asset_type == "asic":
+            hashrate = float(public_asset.get("hashrate_ths_per_unit", 0.0) or 0.0)
+            power = float(public_asset.get("power_kw_per_unit", 0.0) or 0.0)
+            summary["asics"]["units"] += units
+            summary["asics"]["hashrate_ths"] += hashrate * units
+            summary["asics"]["power_kw"] += power * units
+            summary["asics"]["value_usd"] += value_usd
+            summary["asics"]["models"].append({
+                "asset_id": public_asset["asset_id"],
+                "model": public_asset.get("subject"),
+                "units": units,
+                "hashrate_ths": hashrate * units,
+                "power_kw": power * units,
+            })
+        elif asset_type == "gpu":
+            power = float(public_asset.get("power_kw_per_unit", 0.0) or 0.0)
+            summary["gpus"]["units"] += units
+            summary["gpus"]["power_kw"] += power * units
+            summary["gpus"]["value_usd"] += value_usd
+            summary["gpus"]["models"].append({
+                "asset_id": public_asset["asset_id"],
+                "model": public_asset.get("subject"),
+                "units": units,
+                "power_kw": power * units,
+            })
+        elif asset_type == "power":
+            summary["power_mw"] += float(public_asset.get("power_mw", 0.0) or 0.0)
+        elif asset_type == "storage":
+            summary["storage_mwh"] += float(public_asset.get("storage_mwh", 0.0) or 0.0)
+        elif asset_type == "treasury":
+            summary["treasury_btc"] += float(public_asset.get("btc_qty", 0.0) or 0.0)
+            summary["treasury_usd"] += value_usd
+
+    summary["evidence_ids"] = list(dict.fromkeys(summary["evidence_ids"]))
     return summary
