@@ -38,12 +38,14 @@ async def capture_observation(
 ) -> str:
     """Persist an observation, reusing an equivalent fresh fact when possible.
 
-    If the previous fact is stale or materially different, a NEW immutable fact
-    is appended and points at the previous one with ``supersedes``.
+    Value *and structured metadata* must match for reuse. This matters for fleet
+    assets where the unit count can stay constant while power, location, or
+    other economically material fields change.
     """
     if state not in E.EVIDENCE_STATES:
         raise ValueError(f"Invalid evidence state: {state}")
 
+    extra = extra or {}
     history = await E.facts_for(
         domain=domain,
         metric=metric,
@@ -69,7 +71,8 @@ async def capture_observation(
             drift = abs(old_val - float(value)) / abs(old_val) * 100.0
         else:
             drift = abs(old_val - float(value))
-        if drift < MATERIAL_CHANGE_PCT:
+        metadata_matches = (fact.get("extra") or {}) == extra
+        if drift < MATERIAL_CHANGE_PCT and metadata_matches:
             return fact["evidence_id"]
 
     return await E.ingest_fact(
@@ -89,7 +92,7 @@ async def capture_observation(
         user_id=user_id,
         raw_snapshot_ref=raw_snapshot_ref,
         supersedes=latest.get("evidence_id") if latest else None,
-        extra=extra or {},
+        extra=extra,
         _db=_db,
     )
 
