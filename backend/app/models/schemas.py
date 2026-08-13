@@ -408,3 +408,102 @@ class MiningFleetResult(BaseModel):
     asic: Dict[str, Any]
     estimates: Dict[str, Any]
     receipt_id: Optional[str] = None
+
+
+# ---------- Institutional Decision Layer ----------
+
+class ScenarioPreset(BaseModel):
+    name: str
+    label: str
+    vector: Dict[str, float]
+
+
+class ScenarioVector(BaseModel):
+    btc_price_shift_pct: float = 0.0
+    difficulty_shift_pct: float = 0.0
+    electricity_usd_kwh: Optional[float] = None
+    uptime_pct: Optional[float] = None
+    label: Optional[str] = None
+
+
+class ScenarioRunRequest(BaseModel):
+    asic_model: Optional[str] = None
+    hashrate_ths: Optional[float] = None
+    power_watts: Optional[float] = None
+    hardware_cost_usd: Optional[float] = None
+    electricity_usd_kwh: float = Field(gt=0, default=0.10)
+    pool_fee_pct: float = Field(ge=0, default=1.0)
+    uptime_pct: float = Field(gt=0, le=100, default=95.0)
+    preset_names: List[str] = Field(default_factory=list)
+    scenarios: List[ScenarioVector] = Field(default_factory=list)
+    max_total: int = Field(gt=0, le=50, default=20)
+
+
+class ScenarioRunResultItem(BaseModel):
+    label: str
+    vector: Dict[str, float]
+    btc_price: float
+    difficulty: float
+    estimates: Dict[str, Any]
+    risk: str
+    risk_flags: List[str]
+
+
+class ScenarioRunResult(BaseModel):
+    simulation: bool
+    btc_price: float
+    btc_price_provider: str
+    network: MiningNetworkData
+    asic: Dict[str, Any]
+    scenarios: List[ScenarioRunResultItem]
+    ai_review: Optional[str] = None
+    receipt_id: Optional[str] = None
+
+
+class AllocationRequest(BaseModel):
+    capital_usd: float = Field(gt=0)
+    available_mw: float = Field(ge=0, default=0.0)
+    asic_model: Optional[str] = None
+    hashrate_ths: Optional[float] = None
+    power_watts: Optional[float] = None
+    hardware_cost_usd: Optional[float] = None
+    electricity_usd_kwh: float = Field(gt=0, default=0.10)
+    pool_fee_pct: float = Field(ge=0, default=1.0)
+    uptime_pct: float = Field(gt=0, le=100, default=95.0)
+    energy_sell_price_usd_kwh: float = Field(ge=0, default=0.05)
+    cash_interest_rate_pct_year: float = Field(ge=0, default=4.0)
+
+
+class AllocationOption(BaseModel):
+    key: str
+    label: str
+    available: bool
+    reason: Optional[str] = None
+    capital_deployed: float
+    capital_left: float
+    power_used_mw: float
+    btc_exposure: float
+    flow_day: float
+    flow_month: float
+    flow_unit: str
+    break_even: Optional[float] = None
+    risk_flags: List[str]
+    observed: Dict[str, Any] = Field(default_factory=dict)
+    assumptions: Dict[str, Any] = Field(default_factory=dict)
+    payback_days: Optional[float] = None
+    capital_basis_usd: Optional[float] = None
+
+
+class AllocationResult(BaseModel):
+    simulation: bool
+    capital_usd: float
+    available_mw: float
+    btc_price: float
+    btc_price_provider: str
+    network: MiningNetworkData
+    asic: Dict[str, Any]
+    options: List[AllocationOption]
+    ranking: List[str]
+    ranking_basis: str
+    ai_review: Optional[str] = None
+    receipt_id: Optional[str] = None

@@ -477,3 +477,114 @@ async def mining_review_for(
         simulation=simulation,
         extra={"mining": context},
     )
+
+
+async def scenario_review_for(
+    context: Dict,
+    *,
+    user_id: Optional[str] = None,
+    simulation: bool = False,
+) -> str:
+    """Narrate a scenario run: which case hurts most, what flips it."""
+    items = context.get("scenarios", [])
+    if not items:
+        fallback = "AI Scenario Review: no scenario results to interpret."
+        return await generate(
+            "You interpret scenario analysis.", fallback, fallback,
+            job="scenario_review", user_id=user_id, simulation=simulation,
+            extra={"scenario": context},
+        )
+
+    worst = min(items, key=lambda i: (i.get("estimates") or {}).get("operating_profit_day", 0) or 0)
+    best = max(items, key=lambda i: (i.get("estimates") or {}).get("operating_profit_day", 0) or 0)
+    n_unprofitable = sum(
+        1 for i in items if (i.get("estimates") or {}).get("operating_profit_day", 0) <= 0
+    )
+
+    fallback = (
+        f"AI Scenario Review: across {len(items)} scenarios, {n_unprofitable} are "
+        f"unprofitable at current assumptions. The hardest case is '{worst.get('label')}' "
+        f"(operating profit {((worst.get('estimates') or {}).get('operating_profit_day') or 0):,.2f} "
+        f"USD/day); the strongest is '{best.get('label')}' "
+        f"({((best.get('estimates') or {}).get('operating_profit_day') or 0):,.2f} USD/day). "
+        "Scenario results are conditional on their stated assumptions, not forecasts."
+    )
+
+    system = (
+        "You are an institutional scenario analyst. Interpret multi-vector "
+        "scenarios precisely, identify the dominant risk driver, and refuse to "
+        "present scenarios as forecasts. Under 120 words. "
+        f"{_DISCLAIMER}"
+    )
+    user = (
+        "Summarize this scenario run for a mining operator.\n\n"
+        f"Base BTC price: {context.get('btc_price')} | network: {context.get('network', {}).get('source')}\n"
+        f"Scenarios:\n" + "\n".join(
+            f"- {i.get('label')}: profit_day={((i.get('estimates') or {}).get('operating_profit_day') or 0):,.2f} "
+            f"flags={i.get('risk_flags')}"
+            for i in items
+        ) +
+        "\n\nAnswer: (1) which scenario is most dangerous and why, (2) which single "
+        "input drives the swing, (3) what assumption a skeptical operator should "
+        "challenge first."
+    )
+    return await generate(
+        system,
+        user,
+        fallback,
+        job="scenario_review",
+        user_id=user_id,
+        simulation=simulation,
+        extra={"scenario": context},
+    )
+
+
+async def allocation_review_for(
+    context: Dict,
+    *,
+    user_id: Optional[str] = None,
+    simulation: bool = False,
+) -> str:
+    """Verdict on the capital allocation options, grounded in the numbers."""
+    options = context.get("options", [])
+    ranking = context.get("ranking", [])
+    top = next((o for o in options if o.get("key") == (ranking[0] if ranking else None)), None)
+    top_label = top.get("label") if top else "none"
+    top_flow = top.get("flow_month") if top else 0.0
+
+    fallback = (
+        f"AI Allocation Review: on operating flow per capital deployed, the top option "
+        f"is '{top_label}' (~{top_flow:,.0f} USD/month). Ranking basis is capital "
+        "efficiency on operating flow; it excludes risk adjustment, financing and "
+        "horizon. Not investment advice."
+    )
+
+    system = (
+        "You are a capital-allocation strategist for digital-infrastructure "
+        "operators. Compare deployment options using only the provided numbers, "
+        "state the ranking basis, and note what the ranking does NOT capture. "
+        "Under 120 words. "
+        f"{_DISCLAIMER}"
+    )
+    user = (
+        "Interpret this capital allocation run.\n\n"
+        f"Capital: ${context.get('capital_usd'):,.0f} | Power: {context.get('available_mw')} MW | "
+        f"BTC price: {context.get('btc_price')} ({context.get('btc_price_provider')})\n"
+        f"Ranking (basis: {context.get('ranking_basis')}): {ranking}\n"
+        f"Options:\n" + "\n".join(
+            f"- {o.get('key')}: {'available' if o.get('available') else 'unavailable'}, "
+            f"flow_month={o.get('flow_month') or 0:,.0f}, deployed={o.get('capital_deployed') or 0:,.0f}"
+            for o in options
+        ) +
+        "\n\nAnswer: (1) top pick and why, (2) the biggest blind spot in this "
+        "comparison, (3) the one scenario that would change the ranking."
+    )
+    return await generate(
+        system,
+        user,
+        fallback,
+        job="allocation_review",
+        user_id=user_id,
+        simulation=simulation,
+        extra={"allocation": context},
+    )

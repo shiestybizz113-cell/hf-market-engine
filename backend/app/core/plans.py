@@ -50,6 +50,7 @@ PLAN_CATALOG: List[Dict] = [
             "Risk engine",
             "Journal",
             "Mining Intelligence (live profitability, Mine vs Buy, scenarios, AI analysis)",
+            "Institutional Decision Layer (SecDB-style scenarios, capital allocation)",
             "Watchlist 50 assets",
         ],
         "ai_reviews_per_month": 100,
@@ -117,6 +118,9 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
     "mining_economics": "free",   # basic per-rig calculator
     "mining_analysis": "pro",     # live profitability + mine-vs-buy + scenarios + AI review
     "mining_fleet": "advanced",   # fleet modeling
+    # Institutional Decision Layer
+    "scenario_engine": "pro",     # SecDB-style N-dimensional scenario runs
+    "capital_allocation": "pro",  # where should the next $X + Y MW go
 }
 
 
