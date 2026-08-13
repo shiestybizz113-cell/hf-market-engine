@@ -3,12 +3,13 @@
 The original scenario helper predated the customer asset registry and therefore
 recomputed stress cases as if the operator owned nothing. This V2 helper keeps
 the same scenario definitions while passing the owned fleet through every
-recalculation.
+recalculation and applying the same integrity corrections as the base run.
 """
 
 from typing import Dict, List, Optional
 
 from app.core.capital_allocation import run_capital_allocation
+from app.core.capital_integrity import apply_energy_storage_integrity
 from app.core.mining import NetworkData
 
 
@@ -93,6 +94,9 @@ def run_capital_scenarios_v2(*, base: Dict, vectors: List[Dict], owned: Optional
             cash_interest_rate_pct_year=base_inputs.get("cash_interest_rate_pct_year", 4.0),
             owned=owned,
         )
+        # Make scenario economics use the same corrected storage units/capital
+        # basis as the base Capital run.
+        apply_energy_storage_integrity(res)
 
         matrix: Dict[str, Dict] = {}
         for key, lane in res["lanes"].items():
@@ -103,6 +107,7 @@ def run_capital_scenarios_v2(*, base: Dict, vectors: List[Dict], owned: Optional
                 "profit_per_mw": lane["profit_per_mw"],
                 "horizon_value": lane["horizon_value"],
                 "power_mw": lane.get("power_mw"),
+                "integrity_version": lane.get("integrity_version"),
             }
 
         out.append({
