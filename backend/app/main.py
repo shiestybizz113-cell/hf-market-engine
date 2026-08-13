@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.core.database import connect_to_mongo, close_mongo_connection
 from app.core.config import settings
-from app.api import auth, market, trading, system, execution, journal, billing
+from app.api import auth, market, trading, system, execution, journal, billing, evidence, mining
 
 
 @asynccontextmanager
@@ -50,6 +50,8 @@ app.include_router(system.router, prefix="/api")
 app.include_router(execution.router, prefix="/api")
 app.include_router(journal.router, prefix="/api")
 app.include_router(billing.router, prefix="/api")
+app.include_router(evidence.router, prefix="/api")
+app.include_router(mining.router, prefix="/api")
 
 
 @app.get("/")

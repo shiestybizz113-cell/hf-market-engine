@@ -25,8 +25,22 @@ class Settings(BaseSettings):
     TWELVE_DATA_API_KEY: str = ""
     FINNHUB_API_KEY: str = ""
 
+    # Market data honesty contract:
+    #   "demo" -> DemoProvider only; every quote is labeled source=demo.
+    #   "live" -> real providers only; missing live data stays missing (no
+    #             automatic synthetic fill-in). Demo quotes then require an
+    #             explicit opt-in (see market_providers.ProviderRegistry.force_demo).
+    MARKET_DATA_MODE: str = "demo"
+
     OPENAI_API_KEY: str = ""
     GROK_API_KEY: str = ""
+
+    # AI analysis layer. Provider auto-detected from keys above (grok wins if both).
+    AI_MODEL: str = ""
+    AI_MAX_TOKENS: int = 200
+    AI_TEMPERATURE: float = 0.4
+    AI_TIMEOUT: float = 20.0
+    AI_CACHE_TTL: int = 900
 
     REDIS_URL: str = "redis://localhost:6379"
 
@@ -69,6 +83,12 @@ class Settings(BaseSettings):
             raise ValueError("CORS_ORIGINS must be set to your real origin(s) in production")
         if "*" in self.cors_origin_list:
             raise ValueError("CORS_ORIGINS may not contain '*' in production")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_market_data_mode(self) -> "Settings":
+        if self.MARKET_DATA_MODE not in ("demo", "live"):
+            raise ValueError("MARKET_DATA_MODE must be 'demo' or 'live'")
         return self
 
     class Config:

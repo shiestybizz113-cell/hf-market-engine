@@ -5,6 +5,7 @@ Trade Journal Engine — auto-entry from paper trades & execution sims.
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from app.core.database import get_db
+from app.core import ai
 import uuid
 
 
@@ -44,7 +45,9 @@ class JournalEngine:
             "notes": notes,
             "emotion": emotion,
             "mistake_tag": mistake_tag,
-            "ai_review": ai_review or self._default_review(direction, pnl, source),
+            "ai_review": ai_review or await self._default_review(
+                user_id, direction, pnl, source, notes, asset
+            ),
             "lesson": None,
             "created_at": datetime.now(timezone.utc),
         }
@@ -96,15 +99,17 @@ class JournalEngine:
             ),
         )
 
-    def _default_review(self, direction: str, pnl: Optional[float], source: str) -> str:
-        if source == "execution_sim":
-            return "Execution simulation recorded. Review shortfall and child-order quality."
-        if pnl is None:
-            return f"Journal entry for {direction} position. Add notes on process adherence."
-        result = "profitable" if pnl > 0 else "losing"
-        return (
-            f"AI Post-Trade: Simulated {direction} closed with a {result} outcome ({pnl:+.2f}). "
-            "Tag process mistakes separately from market outcomes."
+    async def _default_review(
+        self,
+        user_id: str,
+        direction: str,
+        pnl: Optional[float],
+        source: str,
+        notes: Optional[str],
+        asset: str,
+    ) -> str:
+        return await ai.journal_review_for(
+            asset, direction, pnl, source, notes, user_id=user_id
         )
 
 

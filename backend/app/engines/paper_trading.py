@@ -10,6 +10,7 @@ from app.services.market_data import market_data_service
 from app.engines.risk_engine import risk_engine
 from app.core.database import get_db
 from app.engines.journal_engine import journal_engine
+from app.core import ai
 import uuid
 
 
@@ -75,7 +76,7 @@ class PaperTradingEngine:
             "unrealized_pnl": 0.0,
             "status": "closed",
             "closed_at": datetime.now(timezone.utc),
-            "ai_review": self._post_trade_review(trade, pnl),
+            "ai_review": await self._post_trade_review(user_id, trade, pnl, quote),
         }
         await db.paper_trades.update_one({"_id": trade_id}, {"$set": update})
         trade.update(update)
@@ -108,13 +109,14 @@ class PaperTradingEngine:
             trades.append(self._to_out(t))
         return trades
 
-    def _post_trade_review(self, trade: dict, pnl: float) -> str:
-        result = "profitable" if pnl > 0 else "losing"
-        return (
-            f"AI Post-Trade Review: Simulated {trade['direction']} on {trade['asset']} "
-            f"closed with a {result} outcome ({pnl:+.2f}). "
-            f"Review entry timing, risk parameters, and whether the original thesis remained valid. "
-            f"This is a paper-trade review only."
+    async def _post_trade_review(self, user_id: str, trade: dict, pnl: float, quote) -> str:
+        simulation = quote is None or quote.source == "demo"
+        return await ai.post_trade_review_for(
+            trade["asset"],
+            trade["direction"],
+            pnl,
+            user_id=user_id,
+            simulation=simulation,
         )
 
     def _to_out(self, t: dict) -> PaperTradeOut:

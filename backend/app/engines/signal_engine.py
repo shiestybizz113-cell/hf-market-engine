@@ -11,6 +11,7 @@ from app.models.schemas import (
     TradeIdea, SignalDirection, SignalType, AssetClass, RiskLevel
 )
 from app.services.market_data import market_data_service
+from app.core import ai
 import random
 import uuid
 
@@ -106,7 +107,26 @@ class SignalEngine:
         return ideas[:limit]
 
     async def generate_trade_idea(self, asset: str, asset_class: AssetClass) -> TradeIdea:
-        """Generate a single Trade Idea for a specific asset (template-based)."""
+        """Generate a single Trade Idea for a specific asset (AI + template fallback)."""
+        quote = await market_data_service.get_quote(asset, asset_class)
+        quote_text = (
+            f"price={quote.price}, 24h={quote.change_24h}%, 7d={quote.change_7d}%, "
+            f"30d={quote.change_30d}%, vol24h={quote.volume_24h}, mcap={quote.market_cap}, "
+            f"hi24={quote.high_24h}, lo24={quote.low_24h}, source={quote.source}"
+            if quote else "no live quote available"
+        )
+        regime = "unknown"
+        if asset_class == AssetClass.CRYPTO:
+            try:
+                overview = await market_data_service.get_crypto_overview()
+                regime = overview.regime
+            except Exception:
+                pass
+        simulation = quote is None or quote.source == "demo"
+        thesis = await ai.thesis_for(
+            asset.upper(), asset_class.value, quote_text, regime, simulation=simulation
+        )
+
         stype = random.choice(list(SignalType))
         direction = random.choice(list(SignalDirection))
         return TradeIdea(
@@ -114,7 +134,7 @@ class SignalEngine:
             asset=asset.upper(),
             asset_class=asset_class,
             direction=direction,
-            thesis=random.choice(SAMPLE_THESES.get(stype, ["Structure and volume alignment observed across timeframes."])),
+            thesis=thesis,
             signal_type=stype,
             confidence=round(random.uniform(55, 80), 1),
             time_horizon=random.choice(["4h–24h", "1–3 days", "1–5 days"]),

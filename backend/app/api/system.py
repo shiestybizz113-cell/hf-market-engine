@@ -4,6 +4,7 @@ from app.models.schemas import SystemHealth, PlanInfo
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.plans import catalog_public
+from app.core import ai
 import httpx
 
 router = APIRouter(tags=["system"])
@@ -37,12 +38,16 @@ async def health():
     except Exception:
         pass
 
+    ai_info = ai.provider_info()
+
     return SystemHealth(
         status="operational" if db_status == "ok" else "degraded",
         api="ok",
         database=db_status,
         coingecko=cg_status,
-        ai="template",  # Phase 1 rule-based
+        ai=ai_info["provider"],
+        ai_model=ai_info["model"],
+        market_data_mode=settings.MARKET_DATA_MODE,
         auth="ok",
         last_market_refresh=datetime.now(timezone.utc),
         active_users=active_users,

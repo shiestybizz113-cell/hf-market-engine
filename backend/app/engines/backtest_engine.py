@@ -6,14 +6,15 @@ Architecture ready for real historical bar data later.
 """
 
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from app.models.schemas import BacktestRequest, BacktestResult, StrategyCreate
+from app.core import ai
 import random
 import uuid
 
 
 class BacktestEngine:
-    async def run(self, request: BacktestRequest) -> BacktestResult:
+    async def run(self, request: BacktestRequest, user_id: Optional[str] = None) -> BacktestResult:
         strategy = request.strategy
         name = strategy.name if strategy else "Unnamed Strategy"
 
@@ -39,7 +40,15 @@ class BacktestEngine:
             curve.append({"day": i, "equity": round(equity, 2)})
 
         overfit = round(random.uniform(25, 75), 1)
-        ai_review = self._ai_review(total_return, win_rate, max_dd, profit_factor, n_trades, overfit)
+        metrics = {
+            "total_return_pct": total_return,
+            "win_rate": win_rate,
+            "max_drawdown_pct": max_dd,
+            "profit_factor": profit_factor,
+            "number_of_trades": n_trades,
+            "overfit_risk_score": overfit,
+        }
+        ai_review = await self._ai_review(metrics, user_id)
 
         return BacktestResult(
             id=str(uuid.uuid4()),
@@ -58,32 +67,8 @@ class BacktestEngine:
             is_simulated=True,
         )
 
-    def _ai_review(self, ret, wr, dd, pf, trades, overfit) -> str:
-        comments = []
-        if ret > 20 and wr > 55 and dd < 15:
-            comments.append("Results look promising on the simulated sample.")
-        if dd > 20:
-            comments.append("Drawdown is elevated — consider tighter risk controls.")
-        if pf < 1.1:
-            comments.append("Profit factor is marginal; edge may be weak.")
-        if trades < 20:
-            comments.append("Limited number of trades — statistical significance is low.")
-        if overfit > 60:
-            comments.append("Overfit risk appears elevated. Strategy may be fragile out of sample.")
-        if not comments:
-            comments.append("Mixed results. Further testing across regimes is recommended.")
-
-        verdict = "promising but needs more testing"
-        if overfit > 70 or dd > 25:
-            verdict = "fragile / elevated risk"
-        elif ret > 25 and wr > 58 and dd < 12 and overfit < 45:
-            verdict = "appears relatively robust on this sample"
-
-        return (
-            f"AI Strategy Review (simulated): The strategy appears **{verdict}**. "
-            + " ".join(comments)
-            + " This is historical simulation only and does not guarantee future performance."
-        )
+    async def _ai_review(self, metrics: Dict[str, Any], user_id: Optional[str] = None) -> str:
+        return await ai.backtest_review_for(metrics, user_id=user_id)
 
 
 backtest_engine = BacktestEngine()

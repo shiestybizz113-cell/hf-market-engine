@@ -23,6 +23,7 @@ services:
       MONGODB_DB: hf_market_engine
       SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-do-not-use}
       ENVIRONMENT: development
+      MARKET_DATA_MODE: ${MARKET_DATA_MODE:-demo}
     depends_on:
       - mongo
     volumes:

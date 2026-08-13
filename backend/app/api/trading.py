@@ -179,7 +179,7 @@ def _strategy_out(doc: dict) -> StrategyOut:
 
 @router.post("/backtests", response_model=BacktestResult)
 async def run_backtest(payload: BacktestRequest, current_user=Depends(require_feature("backtesting"))):
-    return await backtest_engine.run(payload)
+    return await backtest_engine.run(payload, user_id=current_user["_id"])
 
 
 # ---------- Paper Trading ----------

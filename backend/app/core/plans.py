@@ -30,6 +30,7 @@ PLAN_CATALOG: List[Dict] = [
             "Watchlist (10 assets)",
             "Basic signals (limited)",
             "Correlation radar (read-only)",
+            "Mining calculator (basic rig economics)",
         ],
         "ai_reviews_per_month": 5,
         "max_watchlist": 10,
@@ -48,6 +49,7 @@ PLAN_CATALOG: List[Dict] = [
             "AI Strategy Council",
             "Risk engine",
             "Journal",
+            "Mining Intelligence (live profitability, Mine vs Buy, scenarios, AI analysis)",
             "Watchlist 50 assets",
         ],
         "ai_reviews_per_month": 100,
@@ -62,6 +64,7 @@ PLAN_CATALOG: List[Dict] = [
         "features": [
             "Everything in Pro",
             "Execution research + sim algos",
+            "Fleet modeling",
             "Higher signal volume",
             "Priority data refresh",
             "Watchlist 200 assets",
@@ -110,6 +113,10 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
     "risk_engine": "pro",
     "journal": "pro",
     "execution_sim": "advanced",
+    # Mining Intelligence lane (read-only economics, evidence-first)
+    "mining_economics": "free",   # basic per-rig calculator
+    "mining_analysis": "pro",     # live profitability + mine-vs-buy + scenarios + AI review
+    "mining_fleet": "advanced",   # fleet modeling
 }
 
 

@@ -79,6 +79,9 @@ class PriceQuote(BaseModel):
     high_24h: Optional[float] = None
     low_24h: Optional[float] = None
     source: str = "demo"
+    provider: str = ""
+    observed_at: Optional[datetime] = None
+    freshness_seconds: Optional[int] = None
     last_updated: Optional[datetime] = None
 
 
@@ -278,6 +281,8 @@ class SystemHealth(BaseModel):
     database: str
     coingecko: str = "unknown"
     ai: str = "template"
+    ai_model: str = ""
+    market_data_mode: str = "demo"
     auth: str = "ok"
     last_market_refresh: Optional[datetime] = None
     active_users: int = 0
@@ -294,3 +299,112 @@ class PlanInfo(BaseModel):
     ai_reviews_per_month: int = 0
     max_watchlist: int = 10
     seats: Optional[int] = None
+
+
+# ---------- Mining Intelligence ----------
+
+class AsicModelInfo(BaseModel):
+    model: str
+    name: str
+    hashrate_ths: float
+    power_watts: float
+    price_usd: float
+    efficiency_j_per_ths: Optional[float] = None
+    class_: Optional[str] = Field(default=None, alias="class")
+
+
+class MiningNetworkData(BaseModel):
+    provider: str
+    source: str
+    observed_at: datetime
+    hashrate_ths: float
+    difficulty: float
+    block_subsidy: float
+    block_time_seconds: float
+    expected_blocks_per_day: float
+
+
+class MiningEstimateRequest(BaseModel):
+    asic_model: Optional[str] = None
+    hashrate_ths: Optional[float] = None
+    power_watts: Optional[float] = None
+    hardware_cost_usd: Optional[float] = None
+    electricity_usd_kwh: float = Field(gt=0, default=0.10)
+    pool_fee_pct: float = Field(ge=0, default=1.0)
+    uptime_pct: float = Field(gt=0, le=100, default=95.0)
+    btc_price: Optional[float] = Field(default=None, gt=0)
+
+
+class MiningEstimateResult(BaseModel):
+    simulation: bool
+    available: bool = True
+    reason: Optional[str] = None
+    asic: Dict[str, Any]
+    btc_price: float
+    btc_price_provider: str
+    network: MiningNetworkData
+    estimates: Dict[str, Any]
+    ai_review: Optional[str] = None
+    receipt_id: Optional[str] = None
+
+
+class MineVsBuyRequest(BaseModel):
+    capital_usd: float = Field(gt=0)
+    asic_model: str
+    electricity_usd_kwh: float = Field(gt=0, default=0.10)
+    pool_fee_pct: float = Field(ge=0, default=1.0)
+    uptime_pct: float = Field(gt=0, le=100, default=95.0)
+    horizon_days: int = Field(ge=1, le=3650, default=365)
+    difficulty_growth_pct_year: float = Field(default=20.0)
+    btc_price_at_horizon: Optional[float] = Field(default=None, gt=0)
+
+
+class MineVsBuyResult(BaseModel):
+    simulation: bool
+    asic: Dict[str, Any]
+    observed: Dict[str, Any]
+    assumptions: Dict[str, Any]
+    buy_path: Dict[str, Any]
+    mining_path: Dict[str, Any]
+    break_even_price_at_horizon: Optional[float] = None
+    verdict: Optional[str] = None
+    ai_review: Optional[str] = None
+    receipt_id: Optional[str] = None
+
+
+class MiningScenarioRequest(BaseModel):
+    asic_model: Optional[str] = None
+    hashrate_ths: Optional[float] = None
+    power_watts: Optional[float] = None
+    hardware_cost_usd: Optional[float] = None
+    electricity_usd_kwh: float = Field(gt=0, default=0.10)
+    pool_fee_pct: float = Field(ge=0, default=1.0)
+    uptime_pct: float = Field(gt=0, le=100, default=95.0)
+    price_shifts_pct: List[float] = Field(default_factory=lambda: [-50, -25, -10, 0, 10, 25, 50])
+    difficulty_shifts_pct: List[float] = Field(default_factory=lambda: [-10, 0, 10, 25])
+
+
+class MiningScenarioResult(BaseModel):
+    simulation: bool
+    network: MiningNetworkData
+    scenarios: List[Dict[str, Any]]
+    receipt_id: Optional[str] = None
+
+
+class MiningFleetRequest(BaseModel):
+    units: int = Field(gt=0, le=10000)
+    asic_model: Optional[str] = None
+    hashrate_ths: Optional[float] = None
+    power_watts: Optional[float] = None
+    hardware_cost_usd: Optional[float] = None
+    electricity_usd_kwh: float = Field(gt=0, default=0.10)
+    pool_fee_pct: float = Field(ge=0, default=1.0)
+    uptime_pct: float = Field(gt=0, le=100, default=95.0)
+
+
+class MiningFleetResult(BaseModel):
+    simulation: bool
+    network: MiningNetworkData
+    asic: Dict[str, Any]
+    estimates: Dict[str, Any]
+    receipt_id: Optional[str] = None

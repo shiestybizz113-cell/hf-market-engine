@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Query, HTTPException
 from typing import List, Optional
-from app.services.market_data import market_data_service, CRYPTO_UNIVERSE, STOCK_UNIVERSE, ETF_UNIVERSE
+from app.services.market_data import market_data_service
+from app.core.market_providers import CRYPTO_UNIVERSE, STOCK_UNIVERSE, ETF_UNIVERSE
 from app.models.schemas import PriceQuote, MarketOverview, AssetClass
 from app.engines.signal_engine import signal_engine
 from app.models.schemas import TradeIdea, CorrelationPair
@@ -21,9 +22,7 @@ async def get_prices(
     syms = [s.strip() for s in symbols.split(",") if s.strip()]
     results = []
     for s in syms:
-        # CoinGecko uses ids for crypto
-        lookup = s.lower() if asset_class == AssetClass.CRYPTO else s.upper()
-        q = await market_data_service.get_quote(lookup, asset_class)
+        q = await market_data_service.get_quote(s, asset_class)
         if q:
             results.append(q)
     return results
@@ -36,8 +35,7 @@ async def movers(asset_class: AssetClass = AssetClass.CRYPTO):
 
 @router.get("/asset/{symbol}")
 async def asset_detail(symbol: str, asset_class: AssetClass = AssetClass.CRYPTO):
-    lookup = symbol.lower() if asset_class == AssetClass.CRYPTO else symbol.upper()
-    quote = await market_data_service.get_quote(lookup, asset_class)
+    quote = await market_data_service.get_quote(symbol, asset_class)
     if not quote:
         raise HTTPException(status_code=404, detail="Asset not found")
     idea = await signal_engine.generate_trade_idea(quote.symbol, asset_class)
