@@ -22,8 +22,6 @@ class Limit:
     window_seconds: int
 
 
-# Tightest limits are on unauthenticated auth routes and expensive Capital
-# operations. Read-only proof/data browsing gets a larger budget.
 ROUTE_LIMITS = {
     "/api/auth/login": Limit(20, 60),
     "/api/auth/register": Limit(10, 60),
@@ -47,13 +45,14 @@ def _client() -> Redis:
 
 
 def _identity(request: Request) -> str:
-    """Pseudonymous counter key: IP hash + authenticated bearer fingerprint.
+    """Pseudonymous counter key: trusted-edge IP + bearer fingerprint.
 
-    We intentionally do not persist the raw IP or token. The short digest is
-    only used inside expiring Redis counters.
+    Caddy overwrites X-Real-IP from the actual remote peer before proxying. We
+    intentionally do NOT trust arbitrary client X-Forwarded-For values here.
+    The digest is only used inside expiring Redis counters.
     """
-    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-    ip = forwarded or (request.client.host if request.client else "unknown")
+    edge_ip = request.headers.get("x-real-ip", "").strip()
+    ip = edge_ip or (request.client.host if request.client else "unknown")
     auth = request.headers.get("authorization", "")
     material = f"{ip}|{auth[:80]}".encode("utf-8")
     return hashlib.sha256(material).hexdigest()[:24]
@@ -90,8 +89,9 @@ async def check_rate_limit(request: Request) -> tuple[bool, dict]:
             "window_seconds": limit.window_seconds,
         }
     except Exception:
-        # Production compose waits for Redis health before the backend starts;
-        # fail-open here avoids turning a transient cache problem into an outage.
+        # Production compose waits for Redis health before backend startup; a
+        # transient cache outage degrades rate limiting instead of taking the
+        # entire read-only intelligence product down.
         return True, {"degraded": True}
 
 
