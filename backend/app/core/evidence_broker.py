@@ -36,11 +36,12 @@ async def capture_observation(
     extra: Optional[Dict] = None,
     _db=None,
 ) -> str:
-    """Persist an observation, reusing an equivalent fresh fact when possible.
+    """Persist an observation, deduping only against the latest fact.
 
-    Value *and structured metadata* must match for reuse. This matters for fleet
-    assets where the unit count can stay constant while power, location, or
-    other economically material fields change.
+    History is append-only. A fresh latest fact is reused only when both its
+    numeric value and structured metadata still match. If the state later
+    returns to an older historical value, a new fact is appended instead of
+    resurrecting the old fact ID; that preserves the event timeline.
     """
     if state not in E.EVIDENCE_STATES:
         raise ValueError(f"Invalid evidence state: {state}")
@@ -63,17 +64,15 @@ async def capture_observation(
     ]
 
     latest = same_source[0] if same_source else None
-    for fact in same_source:
-        if E.is_stale(fact):
-            continue
-        old_val = float(fact.get("value", 0.0))
+    if latest is not None and not E.is_stale(latest):
+        old_val = float(latest.get("value", 0.0))
         if abs(old_val) > 1e-12:
             drift = abs(old_val - float(value)) / abs(old_val) * 100.0
         else:
             drift = abs(old_val - float(value))
-        metadata_matches = (fact.get("extra") or {}) == extra
+        metadata_matches = (latest.get("extra") or {}) == extra
         if drift < MATERIAL_CHANGE_PCT and metadata_matches:
-            return fact["evidence_id"]
+            return latest["evidence_id"]
 
     return await E.ingest_fact(
         domain=domain,
