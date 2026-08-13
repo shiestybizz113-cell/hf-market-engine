@@ -78,6 +78,51 @@ def _enforce_fleet_entitlement(prepared: Dict, current_user: Dict) -> None:
     }
 
 
+def _proposal_evidence(recommendation: Dict, lanes_evidence: Dict) -> Dict:
+    """Describe the evidence quality of lanes that actually receive capital."""
+    pct = recommendation.get("proposed_pct", {})
+    allocation_key = {
+        "btc": "btc_treasury_pct",
+        "mining": "bitcoin_mining_pct",
+        "gpu": "gpu_compute_pct",
+        "energy": "energy_pct",
+    }
+    per_lane: Dict[str, Dict] = {}
+    assumption_heavy: List[str] = []
+    active_scores: List[int] = []
+
+    for lane_key, pct_key in allocation_key.items():
+        allocated_pct = float(pct.get(pct_key, 0.0) or 0.0)
+        lane = lanes_evidence.get(lane_key, {})
+        entry = {
+            "allocated_pct": allocated_pct,
+            "quality_label": lane.get("quality_label", "UNAVAILABLE"),
+            "quality_score": int(lane.get("quality_score", 0) or 0),
+            "conflict_count": int(lane.get("conflict_count", 0) or 0),
+            "facts_used": lane.get("facts_used", []),
+        }
+        per_lane[lane_key] = entry
+        if allocated_pct <= 0:
+            continue
+        active_scores.append(entry["quality_score"])
+        if entry["quality_label"] != "COMPLETE":
+            assumption_heavy.append(lane_key)
+
+    label = "EVIDENCE_BACKED" if active_scores and not assumption_heavy else "ASSUMPTION_HEAVY"
+    return {
+        "label": label,
+        "assumption_heavy": label != "EVIDENCE_BACKED",
+        "assumption_heavy_lanes": assumption_heavy,
+        "active_min_quality_score": min(active_scores) if active_scores else 0,
+        "per_lane": per_lane,
+        "note": (
+            "Recommendation evidence is evaluated only across lanes that receive capital. "
+            "Explicit future/operator assumptions remain visible and keep the proposal "
+            "ASSUMPTION_HEAVY rather than being mislabeled as fully observed."
+        ),
+    }
+
+
 async def _run_prepared(
     *, payload: CapitalRunRequest, current_user: Dict, network, btc_price: float,
     simulation: bool, prov: Dict,
@@ -131,11 +176,9 @@ async def _run_prepared(
         owned=prepared["owned"],
     )
 
-    # Correct legacy energy/storage units + capital basis before ranking or AI.
     apply_energy_storage_integrity(result)
     result["ranking"] = _rank_lanes(result["lanes"])
 
-    # Persist the exact evidence-resolved values actually consumed.
     result["inputs"]["asic"] = effective["asic"]
     result["inputs"]["gpu_capex_usd"] = effective.get("gpu_capex_usd")
     result["inputs"]["gpu_power_kw"] = effective.get("gpu_power_kw")
@@ -145,12 +188,14 @@ async def _run_prepared(
     result["inputs"]["energy_sell_price_usd_kwh"] = effective.get("energy_sell_price_usd_kwh")
 
     apply_evidence_to_result(result, prepared)
-    result["recommendation"] = propose_allocation(
+    recommendation = propose_allocation(
         capital_usd=payload.capital_usd,
         lanes=result["lanes"],
         risk_profile=payload.risk_profile,
         evidence=prepared["lanes"],
     )
+    recommendation["evidence"] = _proposal_evidence(recommendation, prepared["lanes"])
+    result["recommendation"] = recommendation
     result["owned"]["registry"] = prepared["owned"]
     result["owned"]["fleet_entitled"] = bool(prepared["owned"].get("entitled", False))
     result["disclaimer"] = _DISCLAIMER
@@ -204,11 +249,8 @@ async def capital_run(
     )
 
     receipt_id = await _persist_capital_receipt(
-        user_id=current_user["_id"],
-        analysis_type="capital_allocation_run_v2",
-        simulation=simulation,
-        result=result,
-        prepared=prepared,
+        user_id=current_user["_id"], analysis_type="capital_allocation_run_v2",
+        simulation=simulation, result=result, prepared=prepared,
     )
 
     ai_review = None
@@ -216,8 +258,7 @@ async def capital_run(
         if await try_consume_ai_review(current_user):
             ai_review = await ai.capital_review_for(
                 {**result, "receipt_id": receipt_id},
-                user_id=current_user["_id"],
-                simulation=simulation,
+                user_id=current_user["_id"], simulation=simulation,
             )
 
     result["ai_review"] = ai_review
@@ -252,11 +293,8 @@ async def capital_scenarios(
 
     matrix = run_capital_scenarios_v2(base=base, vectors=vectors, owned=prepared["owned"])
     receipt_id = await _persist_capital_receipt(
-        user_id=current_user["_id"],
-        analysis_type="capital_allocation_scenarios_v2",
-        simulation=simulation,
-        result=base,
-        prepared=prepared,
+        user_id=current_user["_id"], analysis_type="capital_allocation_scenarios_v2",
+        simulation=simulation, result=base, prepared=prepared,
         extra={"scenario_keys": keys, "scenario_vectors": vectors},
     )
 
@@ -302,21 +340,19 @@ async def capital_optimize(
             risk_profile=profile,
             evidence=prepared["lanes"],
         )
+        recommendation["evidence"] = _proposal_evidence(recommendation, prepared["lanes"])
         proposals[profile] = {
             "proposed_pct": recommendation["proposed_pct"],
             "proposed_usd": recommendation["proposed_usd"],
             "basis": recommendation["basis"],
             "reserve_pct": RISK_PROFILES[profile]["reserve_pct"],
             "treasury_floor_pct": RISK_PROFILES[profile]["treasury_floor_pct"],
-            "evidence": recommendation.get("evidence", {}),
+            "evidence": recommendation["evidence"],
         }
 
     receipt_id = await _persist_capital_receipt(
-        user_id=current_user["_id"],
-        analysis_type="capital_allocation_optimize_v2",
-        simulation=simulation,
-        result=base,
-        prepared=prepared,
+        user_id=current_user["_id"], analysis_type="capital_allocation_optimize_v2",
+        simulation=simulation, result=base, prepared=prepared,
         extra={"optimizer_profiles": profiles, "optimizer_proposals": proposals},
     )
 
