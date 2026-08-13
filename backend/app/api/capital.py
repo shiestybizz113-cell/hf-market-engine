@@ -44,6 +44,40 @@ def _resolve_asic(payload: CapitalRunRequest) -> Dict:
         )
 
 
+def _empty_owned_summary() -> Dict:
+    return {
+        "asics": {"units": 0, "hashrate_ths": 0.0, "power_kw": 0.0, "value_usd": 0.0, "models": []},
+        "gpus": {"units": 0, "power_kw": 0.0, "value_usd": 0.0, "models": []},
+        "power_mw": 0.0,
+        "storage_mwh": 0.0,
+        "treasury_btc": 0.0,
+        "treasury_usd": 0.0,
+        "total_value_usd": 0.0,
+        "asset_count": 0,
+        "evidence_ids": [],
+        "entitled": False,
+        "note": "Persistent owned-fleet modeling requires Advanced+.",
+    }
+
+
+def _enforce_fleet_entitlement(prepared: Dict, current_user: Dict) -> None:
+    """Prevent Pro users/downgraded accounts from consuming Advanced fleet state."""
+    if has_feature(current_user.get("plan", "free"), "mining_fleet"):
+        prepared["owned"]["entitled"] = True
+        return
+
+    previous_ids = set(prepared.get("owned", {}).get("evidence_ids", []))
+    prepared["evidence_ids"] = [
+        evidence_id for evidence_id in prepared.get("evidence_ids", [])
+        if evidence_id not in previous_ids
+    ]
+    prepared["owned"] = _empty_owned_summary()
+    prepared.setdefault("context", {})["fleet_entitlement"] = {
+        "enabled": False,
+        "required_plan": "advanced",
+    }
+
+
 async def _run_prepared(
     *, payload: CapitalRunRequest, current_user: Dict, network, btc_price: float,
     simulation: bool, prov: Dict,
@@ -60,6 +94,7 @@ async def _run_prepared(
         simulation=simulation,
         asic=asic,
     )
+    _enforce_fleet_entitlement(prepared, current_user)
     effective = prepared["engine"]
 
     result = run_capital_allocation(
@@ -117,6 +152,7 @@ async def _run_prepared(
         evidence=prepared["lanes"],
     )
     result["owned"]["registry"] = prepared["owned"]
+    result["owned"]["fleet_entitled"] = bool(prepared["owned"].get("entitled", False))
     result["disclaimer"] = _DISCLAIMER
     return result, prepared
 
@@ -142,7 +178,7 @@ async def _persist_capital_receipt(
         "recommendation": result["recommendation"],
         "owned": result.get("owned", {}),
         "disclaimer": _DISCLAIMER,
-        "proof_contract": "receipt -> lane -> immutable evidence fact -> source/provider -> raw snapshot",
+        "proof_contract": "receipt -> lane -> immutable evidence fact -> source/provider -> snapshot hash",
     }
     if extra:
         doc.update(extra)
