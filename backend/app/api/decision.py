@@ -11,12 +11,13 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.core import ai
 from app.core.scenario import SCENARIO_PRESETS, run_scenario_set
-from app.core.allocation import allocate, rank_options
+from app.core.allocation import allocate, rank_options, gpu_lanes
 from app.api.mining import _catalog_item, _live_context, _persist_mining_receipt
 from app.core.plans import require_feature, has_feature, try_consume_ai_review
 from app.models.schemas import (
     ScenarioPreset, ScenarioVector, ScenarioRunRequest, ScenarioRunResult,
     ScenarioRunResultItem, AllocationRequest, AllocationResult, AllocationOption,
+    GpuEconomicsRequest, GpuEconomicsResult, GpuLaneResult,
     MiningNetworkData,
 )
 from app.core.mining import network_data_dict
@@ -172,6 +173,14 @@ async def allocation_run(
         uptime_pct=payload.uptime_pct,
         energy_sell_price_usd_kwh=payload.energy_sell_price_usd_kwh,
         cash_interest_rate_pct_year=payload.cash_interest_rate_pct_year,
+        gpu_model=payload.gpu_model or "",
+        gpu_capex_usd=payload.gpu_capex_usd,
+        gpu_power_kw=payload.gpu_power_kw,
+        gpu_cloud_rental_usd_per_hr=payload.gpu_cloud_rental_usd_per_hr,
+        gpu_rental_usd_per_hr=payload.gpu_rental_usd_per_hr,
+        gpu_utilization_pct=payload.gpu_utilization_pct,
+        gpu_uptime_pct=payload.gpu_uptime_pct,
+        gpu_units_cap=payload.gpu_units_cap,
     )
     ranking = rank_options(options)
 
@@ -198,6 +207,14 @@ async def allocation_run(
             "uptime_pct": payload.uptime_pct,
             "energy_sell_price_usd_kwh": payload.energy_sell_price_usd_kwh,
             "cash_interest_rate_pct_year": payload.cash_interest_rate_pct_year,
+            "gpu_model": payload.gpu_model,
+            "gpu_capex_usd": payload.gpu_capex_usd,
+            "gpu_power_kw": payload.gpu_power_kw,
+            "gpu_cloud_rental_usd_per_hr": payload.gpu_cloud_rental_usd_per_hr,
+            "gpu_rental_usd_per_hr": payload.gpu_rental_usd_per_hr,
+            "gpu_utilization_pct": payload.gpu_utilization_pct,
+            "gpu_uptime_pct": payload.gpu_uptime_pct,
+            "gpu_units_cap": payload.gpu_units_cap,
         },
     )
 
@@ -229,6 +246,107 @@ async def allocation_run(
         options=[AllocationOption(**o) for o in options],
         ranking=ranking,
         ranking_basis=RANKING_BASIS,
+        ai_review=ai_review,
+        receipt_id=receipt_id,
+    )
+
+
+@router.post("/gpu/run", response_model=GpuEconomicsResult)
+async def gpu_run(
+    payload: GpuEconomicsRequest,
+    current_user=Depends(require_feature("capital_allocation")),
+):
+    """Standalone build-vs-cloud GPU economics.
+
+    Unlike the allocation/scenario endpoints this does NOT depend on live
+    market data: every GPU number is an operator assumption (capex, rental
+    rates, utilization), so there is nothing to fetch and no simulation flag.
+    The receipt's observed block is empty by design — nothing is claimed as
+    observed market data.
+    """
+    build, cloud = gpu_lanes(
+        capital_usd=payload.capital_usd,
+        available_mw=payload.available_mw,
+        electricity_usd_kwh=payload.electricity_usd_kwh,
+        gpu_model=payload.gpu_model or "",
+        gpu_capex_usd=payload.gpu_capex_usd,
+        gpu_power_kw=payload.gpu_power_kw,
+        gpu_cloud_rental_usd_per_hr=payload.gpu_cloud_rental_usd_per_hr,
+        gpu_rental_usd_per_hr=payload.gpu_rental_usd_per_hr,
+        gpu_utilization_pct=payload.gpu_utilization_pct,
+        gpu_uptime_pct=payload.gpu_uptime_pct,
+        gpu_units_cap=payload.gpu_units_cap,
+    )
+
+    def lane(key: str) -> Dict:
+        return next(o for o in (build, cloud) if o["key"] == key)
+
+    context = {
+        "capital_usd": payload.capital_usd,
+        "available_mw": payload.available_mw,
+        "gpu": lane("build_gpus")["assumptions"],
+        "gpu_achieved_rental_usd_hr": lane("build_gpus")["assumptions"].get("gpu_achieved_rental_usd_hr"),
+        "gpu_cloud_rental_usd_hr": lane("build_gpus")["assumptions"].get("gpu_cloud_rental_usd_hr"),
+        "gpu_utilization_pct": payload.gpu_utilization_pct,
+        "electricity_usd_kwh": payload.electricity_usd_kwh,
+        "build": lane("build_gpus"),
+        "cloud": lane("cloud_gpus"),
+    }
+
+    assumptions = dict(lane("build_gpus")["assumptions"])
+    assumptions.update({
+        "capital_usd": payload.capital_usd,
+        "available_mw": payload.available_mw,
+        "electricity_usd_kwh": payload.electricity_usd_kwh,
+    })
+    receipt_id = await _persist_mining_receipt(
+        user_id=current_user["_id"],
+        analysis_type="gpu_economics",
+        simulation=False,
+        flat={
+            "capital_usd": payload.capital_usd,
+            "available_mw": payload.available_mw,
+            "gpu_model": assumptions.get("gpu_model"),
+            "build_units": lane("build_gpus").get("units", 0),
+            "build_flow_month": lane("build_gpus").get("flow_month", 0.0),
+            "cloud_units": lane("cloud_gpus").get("units", 0),
+            "cloud_flow_month": lane("cloud_gpus").get("flow_month", 0.0),
+            "disclaimer": "All GPU economics are operator assumptions; no live GPU spot provider is wired.",
+        },
+        observed={},
+        assumptions=assumptions,
+    )
+
+    ai_review = None
+    if has_feature(current_user.get("plan", "free"), "capital_allocation") \
+            and await try_consume_ai_review(current_user):
+        ai_review = await ai.gpu_review_for(
+            context,
+            user_id=current_user["_id"],
+            simulation=False,
+        )
+
+    def lane_result(o: Dict) -> GpuLaneResult:
+        return GpuLaneResult(
+            key=o["key"],
+            label=o["label"],
+            available=o["available"],
+            reason=o.get("reason"),
+            units=o.get("units", 0),
+            capital_deployed=o.get("capital_deployed", 0.0),
+            power_used_mw=o.get("power_used_mw", 0.0),
+            flow_day=o.get("flow_day", 0.0),
+            flow_month=o.get("flow_month", 0.0),
+            payback_days=o.get("payback_days"),
+            per_unit=o.get("per_unit", {}),
+            risk_flags=o.get("risk_flags", []),
+            assumptions=o.get("assumptions", {}),
+        )
+
+    return GpuEconomicsResult(
+        gpu=lane("build_gpus")["assumptions"],
+        build=lane_result(lane("build_gpus")),
+        cloud=lane_result(lane("cloud_gpus")),
         ai_review=ai_review,
         receipt_id=receipt_id,
     )

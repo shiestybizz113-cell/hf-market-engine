@@ -68,7 +68,11 @@ class MarketDataService:
                 freshness_seconds=int((now - nq.observed_at).total_seconds()),
                 last_updated=now,
             )
-        self._cache[asset_class] = (now, quotes)
+        # Only cache a non-empty set. Caching a failed/empty fetch would let a
+        # transient provider outage self-extend under polling — every retry
+        # would re-stamp the cache timestamp with nothing usable.
+        if quotes:
+            self._cache[asset_class] = (now, quotes)
         return quotes
 
     async def get_quote(self, symbol: str, asset_class: AssetClass) -> Optional[PriceQuote]:

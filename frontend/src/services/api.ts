@@ -103,3 +103,8 @@ export const listExecutionOrders = (status?: string) =>
 export const getExecutionOrder = (id: string) => api.get(`/execution/orders/${id}`)
 export const getExecutionAnalytics = (id: string) => api.get(`/execution/orders/${id}/analytics`)
 export const cancelExecutionOrder = (id: string) => api.post(`/execution/orders/${id}/cancel`)
+
+// Capital Allocation Command Center
+export const runCapitalAllocation = (data: any) => api.post('/capital/run', data)
+export const runCapitalScenarios = (data: any) => api.post('/capital/scenarios', data)
+export const runCapitalOptimize = (data: any) => api.post('/capital/optimize', data)

@@ -4,7 +4,7 @@ import {
   LayoutDashboard, CandlestickChart, Eye, Zap, Crosshair,
   FlaskConical, LineChart, FileText, Briefcase, Shield,
   Brain, BookOpen, BarChart3, CreditCard, Activity, Settings, Target,
-  LogOut, Search
+  LogOut, Search, Landmark
 } from 'lucide-react'
 import { getOverview } from '../services/api'
 
@@ -18,6 +18,7 @@ const nav = [
     { to: '/watchlist', label: 'Watchlist', icon: Eye },
   ]},
   { section: 'Intelligence', items: [
+    { to: '/capital', label: 'Capital Command Center', icon: Landmark },
     { to: '/alpha', label: 'Alpha Scanner', icon: Crosshair },
     { to: '/correlations', label: 'Correlation Radar', icon: Zap },
     { to: '/signals', label: 'Signals', icon: Zap },

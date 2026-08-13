@@ -21,6 +21,7 @@ import LiveMarket from './pages/LiveMarket'
 import AlphaScanner from './pages/AlphaScanner'
 import Reports from './pages/Reports'
 import Settings from './pages/Settings'
+import Capital from './pages/Capital'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem('token')
@@ -42,6 +43,7 @@ export default function App() {
         <Route path="/macro" element={<LiveMarket market="macro" />} />
         <Route path="/watchlist" element={<Watchlist />} />
         <Route path="/alpha" element={<AlphaScanner />} />
+        <Route path="/capital" element={<Capital />} />
         <Route path="/correlations" element={<Correlations />} />
         <Route path="/signals" element={<Signals />} />
         <Route path="/ai-council" element={<AICouncil />} />

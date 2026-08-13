@@ -9,7 +9,12 @@ power consumed, BTC exposure) using live market + network data:
     mine        - buy ASICs within capital AND power (MW) constraints
     curtail     - sell/curtail power at an energy price assumption
     hold_cash   - cash earning an interest assumption
-    buy_gpus    - GPU compute slot (not yet wired; honest 'unavailable')
+    build_gpus  - buy GPUs (AI compute) within capital AND power; rental flow
+    cloud_gpus  - rent GPUs (no capex/power); rental-spread flow, zero-capital
+
+GPU rental rates are operator assumptions (no live GPU spot provider is wired)
+and are labeled as such. When no achieved rental rate is given, both lanes
+default to the catalog cloud-reference rate (zero-margin — no invented profit).
 
 Options are ranked by monthly operating flow per unit of capital deployed
 (capital efficiency) by default; the basis is stated in the output so the
@@ -22,6 +27,7 @@ Locked rule: no "ROI". Operating flow and capital basis only.
 from typing import Dict, List
 
 from app.core.mining import NetworkData, compute_estimate, network_data_dict
+from app.core.gpu import gpu_economics, resolve_gpu
 
 DAYS_PER_MONTH = 30.0
 KW_PER_MW = 1000.0
@@ -66,6 +72,14 @@ def allocate(
     uptime_pct: float,
     energy_sell_price_usd_kwh: float,
     cash_interest_rate_pct_year: float,
+    gpu_model: str = "",
+    gpu_capex_usd: float | None = None,
+    gpu_power_kw: float | None = None,
+    gpu_cloud_rental_usd_per_hr: float | None = None,
+    gpu_rental_usd_per_hr: float | None = None,
+    gpu_utilization_pct: float = 85.0,
+    gpu_uptime_pct: float = 100.0,
+    gpu_units_cap: int = 256,
 ) -> List[Dict]:
     options: List[Dict] = []
 
@@ -210,26 +224,211 @@ def allocate(
         "assumptions": {"cash_interest_rate_pct_year": cash_interest_rate_pct_year},
     })
 
-    # 5) GPU compute slot — surface exists, economics not yet wired
-    options.append({
-        "key": "buy_gpus",
-        "label": "Buy / rent GPUs (AI compute)",
-        "available": False,
-        "reason": "GPU compute economics not yet wired (build-vs-cloud is a planned lane).",
-        "capital_deployed": 0.0,
-        "capital_left": capital_usd,
-        "power_used_mw": 0.0,
-        "btc_exposure": 0.0,
-        "flow_day": 0.0,
-        "flow_month": 0.0,
-        "flow_unit": "usd_month_operating",
-        "break_even": None,
-        "risk_flags": ["pending_lane"],
-        "observed": {},
-        "assumptions": {},
-    })
+    # 5) GPUs: build vs cloud (AI compute economics lane)
+    options.extend(gpu_lanes(
+        capital_usd=capital_usd,
+        available_mw=available_mw,
+        electricity_usd_kwh=electricity_usd_kwh,
+        gpu_model=gpu_model,
+        gpu_capex_usd=gpu_capex_usd,
+        gpu_power_kw=gpu_power_kw,
+        gpu_cloud_rental_usd_per_hr=gpu_cloud_rental_usd_per_hr,
+        gpu_rental_usd_per_hr=gpu_rental_usd_per_hr,
+        gpu_utilization_pct=gpu_utilization_pct,
+        gpu_uptime_pct=gpu_uptime_pct,
+        gpu_units_cap=gpu_units_cap,
+    ))
 
     return options
+
+
+def gpu_lanes(
+    *,
+    capital_usd: float,
+    available_mw: float,
+    electricity_usd_kwh: float,
+    gpu_model: str,
+    gpu_capex_usd: float | None,
+    gpu_power_kw: float | None,
+    gpu_cloud_rental_usd_per_hr: float | None,
+    gpu_rental_usd_per_hr: float | None,
+    gpu_utilization_pct: float,
+    gpu_uptime_pct: float,
+    gpu_units_cap: int,
+) -> List[Dict]:
+    """Build the build_gpus + cloud_gpus option dicts.
+
+    Same shape as other allocation options plus a per_unit economics dict (the
+    allocation response model ignores the extra key; the standalone GPU
+    economics endpoint uses it). Every GPU number is an operator assumption —
+    no live GPU spot provider is wired.
+    """
+    gpu = resolve_gpu(
+        gpu_model or None,
+        gpu_capex_usd,
+        gpu_power_kw,
+        gpu_cloud_rental_usd_per_hr,
+    )
+    gpu_active = gpu.get("present", False)
+    achieved_rate = gpu_rental_usd_per_hr
+    cloud_rate = gpu.get("cloud_rental_usd_hr")
+    if gpu_active and achieved_rate is None:
+        # Conservative default: achieve exactly the market cloud reference
+        # rate. No invented margin.
+        achieved_rate = cloud_rate
+    gpu_assumptions = {
+        "gpu_model": gpu.get("model"),
+        "gpu_capex_usd": gpu.get("capex_usd"),
+        "gpu_power_kw": gpu.get("power_kw"),
+        "gpu_achieved_rental_usd_hr": achieved_rate,
+        "gpu_cloud_rental_usd_hr": cloud_rate,
+        "gpu_utilization_pct": gpu_utilization_pct,
+        "gpu_uptime_pct": gpu_uptime_pct,
+        "gpu_units_cap": gpu_units_cap,
+    }
+    lanes: List[Dict] = []
+
+    if not gpu_active:
+        lanes.append({
+            "key": "build_gpus",
+            "label": "Build GPUs (AI compute)",
+            "available": False,
+            "reason": "No GPU model selected (set gpu_model or gpu_capex_usd + gpu_power_kw).",
+            "capital_deployed": 0.0,
+            "capital_left": capital_usd,
+            "power_used_mw": 0.0,
+            "btc_exposure": 0.0,
+            "flow_day": 0.0,
+            "flow_month": 0.0,
+            "flow_unit": "usd_month_operating",
+            "break_even": None,
+            "risk_flags": ["pending_inputs"],
+            "observed": {"available_mw": available_mw},
+            "assumptions": gpu_assumptions,
+        })
+        lanes.append({
+            "key": "cloud_gpus",
+            "label": "Rent GPUs in cloud (AI compute)",
+            "available": False,
+            "reason": "No GPU model selected (set gpu_model or gpu_capex_usd).",
+            "capital_deployed": 0.0,
+            "capital_left": capital_usd,
+            "power_used_mw": 0.0,
+            "btc_exposure": 0.0,
+            "flow_day": 0.0,
+            "flow_month": 0.0,
+            "flow_unit": "usd_month_operating",
+            "break_even": None,
+            "risk_flags": ["pending_inputs"],
+            "observed": {"available_mw": available_mw},
+            "assumptions": gpu_assumptions,
+        })
+    else:
+        # --- 5a) Build: buy GPUs within capital AND power constraints ---
+        units_by_capital = (
+            int(capital_usd // gpu["capex_usd"]) if gpu["capex_usd"] > 0 else 0
+        )
+        units_by_power = 0
+        if available_mw > 0 and gpu["power_kw"] > 0:
+            units_by_power = int(
+                (available_mw * KW_PER_MW) // gpu["power_kw"]
+            )
+        units = min(gpu_units_cap, units_by_capital)
+        if available_mw > 0:
+            units = min(units, units_by_power)
+
+        if units <= 0:
+            lanes.append({
+                "key": "build_gpus",
+                "label": f"Build GPUs ({gpu['model']})",
+                "available": False,
+                "reason": (
+                    "Capital below one GPU's cost, or power budget below one GPU's draw."
+                    if available_mw >= 0 else "Unavailable"
+                ),
+                "capital_deployed": 0.0,
+                "capital_left": capital_usd,
+                "power_used_mw": 0.0,
+                "btc_exposure": 0.0,
+                "flow_day": 0.0,
+                "flow_month": 0.0,
+                "flow_unit": "usd_month_operating",
+                "break_even": None,
+                "risk_flags": ["insufficient_capital_or_power"],
+                "observed": {"available_mw": available_mw},
+                "assumptions": gpu_assumptions,
+            })
+        else:
+            gest = gpu_economics(
+                gpu=gpu,
+                achieved_rental_usd_hr=achieved_rate,
+                cloud_rental_usd_hr=cloud_rate,
+                utilization_pct=gpu_utilization_pct,
+                uptime_pct=gpu_uptime_pct,
+                electricity_usd_kwh=electricity_usd_kwh,
+            )
+            total_hw = units * gpu["capex_usd"]
+            flags = ["gpu_economics_assumed"]
+            if gest["build_profit_day"] <= 0:
+                flags.append("unprofitable")
+            if gest["build_payback_days"] is not None and gest["build_payback_days"] > 730:
+                flags.append("slow_payback")
+            lanes.append({
+                "key": "build_gpus",
+                "label": f"Build GPUs ({units}x {gpu['model']})",
+                "available": True,
+                "reason": None,
+                "capital_deployed": total_hw,
+                "capital_left": max(0.0, capital_usd - total_hw),
+                "power_used_mw": units * gpu["power_kw"] / KW_PER_MW,
+                "btc_exposure": 0.0,
+                "flow_day": gest["build_profit_day"] * units,
+                "flow_month": gest["build_profit_month"] * units,
+                "flow_unit": "usd_month_operating",
+                "break_even": None,
+                "risk_flags": flags,
+                "payback_days": gest["build_payback_days"],
+                "capital_basis_usd": total_hw,
+                "per_unit": gest,
+                "observed": {"available_mw": available_mw},
+                "assumptions": gpu_assumptions,
+            })
+
+        # --- 5b) Cloud: rent GPUs (no capex, no power) ---
+        # No capital or power constraint applies; the operator's addressable
+        # GPU demand (gpu_units_cap) is the only bound — an explicit assumption.
+        units_cloud = max(1, gpu_units_cap)
+        gest = gpu_economics(
+            gpu=gpu,
+            achieved_rental_usd_hr=achieved_rate,
+            cloud_rental_usd_hr=cloud_rate,
+            utilization_pct=gpu_utilization_pct,
+            uptime_pct=gpu_uptime_pct,
+            electricity_usd_kwh=electricity_usd_kwh,
+        )
+        cloud_flags = ["gpu_economics_assumed"]
+        if gest["cloud_profit_day"] < 0:
+            cloud_flags.append("negative_margin")
+        lanes.append({
+            "key": "cloud_gpus",
+            "label": f"Rent GPUs in cloud ({units_cloud}x {gpu['model']})",
+            "available": True,
+            "reason": None,
+            "capital_deployed": 0.0,
+            "capital_left": capital_usd,
+            "power_used_mw": 0.0,
+            "btc_exposure": 0.0,
+            "flow_day": gest["cloud_profit_day"] * units_cloud,
+            "flow_month": gest["cloud_profit_month"] * units_cloud,
+            "flow_unit": "usd_month_operating",
+            "break_even": None,
+            "risk_flags": cloud_flags,
+            "per_unit": gest,
+            "observed": {"available_mw": available_mw},
+            "assumptions": gpu_assumptions,
+        })
+
+    return lanes
 
 
 def rank_options(options: List[Dict]) -> List[str]:

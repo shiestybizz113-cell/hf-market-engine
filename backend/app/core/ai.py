@@ -461,7 +461,9 @@ async def mining_review_for(
         f"ASIC: {context.get('asic', {}).get('name')} "
         f"({context.get('asic', {}).get('hashrate_ths')} TH/s, "
         f"{context.get('asic', {}).get('power_watts')} W).\n"
-        f"BTC price: {context.get('btc_price')}\n"
+        f"BTC price: {context.get('btc_price')} "
+        f"(provider: {context.get('btc_price_provider')}, "
+        f"observed: {context.get('btc_price_observed')})\n"
         f"Electricity: {context.get('electricity_usd_kwh')} USD/kWh, "
         f"pool fee {context.get('pool_fee_pct')}%, uptime {context.get('uptime_pct')}%.\n"
         f"Estimates: {est}\n\n"
@@ -587,4 +589,229 @@ async def allocation_review_for(
         user_id=user_id,
         simulation=simulation,
         extra={"allocation": context},
+    )
+
+
+async def gpu_review_for(
+    context: Dict,
+    *,
+    user_id: Optional[str] = None,
+    simulation: bool = False,
+) -> str:
+    """Verdict on build-vs-cloud GPU economics, grounded in the assumptions."""
+    gpu = context.get("gpu", {})
+    build = context.get("build", {})
+    cloud = context.get("cloud", {})
+    bflow = (build.get("flow_month") or 0.0) if build.get("available") else 0.0
+    cflow = (cloud.get("flow_month") or 0.0) if cloud.get("available") else 0.0
+
+    fallback = (
+        f"AI GPU Review: build lane flows ~{bflow:,.0f} USD/month on "
+        f"{build.get('units') or 0} GPUs; cloud lane flows ~{cflow:,.0f} USD/month "
+        "on the rental spread. All GPU economics are assumptions (no live GPU "
+        "provider). Zero-margin default when no achieved rate is set. "
+        "Not investment advice."
+    )
+
+    system = (
+        "You are a GPU-infrastructure economics reviewer for digital-infrastructure "
+        "operators. Compare build-vs-cloud using ONLY the provided numbers, remind "
+        "the reader that every GPU number is an operator assumption (rental rates, "
+        "utilization, capex) — there is no live GPU spot provider — and note what "
+        "the comparison does NOT capture (demand, utilization risk, resale). "
+        "Under 120 words. "
+        f"{_DISCLAIMER}"
+    )
+    user = (
+        "Interpret this build-vs-cloud GPU economics run.\n\n"
+        f"GPU: {gpu.get('model') or 'custom'} | capex ${gpu.get('capex_usd')} | "
+        f"power {gpu.get('power_kw')} kW\n"
+        f"Build lane: units={build.get('units')}, flow_month={bflow:,.0f}, "
+        f"payback_days={build.get('payback_days')}, flags={build.get('risk_flags')}\n"
+        f"Cloud lane: units={cloud.get('units')}, flow_month={cflow:,.0f}, "
+        f"flags={cloud.get('risk_flags')}\n"
+        f"Assumptions: achieved={context.get('gpu_achieved_rental_usd_hr')} $/hr, "
+        f"cloud={context.get('gpu_cloud_rental_usd_hr')} $/hr, "
+        f"utilization={context.get('gpu_utilization_pct')}%, "
+        f"electricity=${context.get('electricity_usd_kwh')}/kWh\n\n"
+        "Answer: (1) build vs cloud call and why, (2) the biggest assumption risk, "
+        "(3) what would flip the call."
+    )
+    return await generate(
+        system,
+        user,
+        fallback,
+        job="gpu_review",
+        user_id=user_id,
+        simulation=simulation,
+        extra={"gpu_economics": context},
+    )
+
+
+async def mine_vs_buy_review_for(
+    context: Dict,
+    *,
+    user_id: Optional[str] = None,
+    simulation: bool = False,
+) -> str:
+    """Verdict on mine-vs-buy, honoring the reconciled capital accounting."""
+    mining = context.get("mining_path", {})
+    buy = context.get("buy_path", {})
+    assumptions = context.get("assumptions", {})
+    verdict = context.get("verdict")
+    be = context.get("break_even_price_at_horizon")
+
+    if not mining.get("available"):
+        fallback = (
+            f"AI Mine-vs-Buy Review: mining is unavailable on this capital "
+            f"({mining.get('reason', 'unknown reason')}). Buy path is the only "
+            "option compared here. Not investment advice."
+        )
+    else:
+        mv = mining.get("value_at_horizon") or 0.0
+        bv = buy.get("value_at_horizon") or 0.0
+        fallback = (
+            f"AI Mine-vs-Buy Review: mining ends at ~${mv:,.0f} vs buying "
+            f"~${bv:,.0f} at the horizon, so {verdict.lower()}. Both paths start "
+            "from the same capital; the mining path is reconciled across equipment, "
+            "working capital, operating costs and residual hardware value. "
+            f"Break-even horizon price is "
+            f"{f'${be:,.0f}' if be else 'not reached in a positive range'}. "
+            "Every BTC and dollar figure is conditional on the stated assumptions, "
+            "not a forecast. Not investment advice."
+        )
+
+    system = (
+        "You are a capital-allocation analyst for mining operators. Compare mining "
+        "vs buying using ONLY the provided numbers, verify the capital accounting "
+        "reconciles (equipment, setup, working capital, operating costs, residual), "
+        "never present assumptions as forecasts, and name the single assumption "
+        "that drives the verdict. Under 120 words. "
+        f"{_DISCLAIMER}"
+    )
+    user = (
+        "Interpret this mine-vs-buy run, given both paths start from the same "
+        "capital and are reconciled.\n\n"
+        f"Capital: ${context.get('capital_usd'):,.0f} | BTC entry: "
+        f"{context.get('btc_price')} | Horizon: {assumptions.get('horizon_days')} days\n"
+        f"Assumptions: price_at_horizon={assumptions.get('btc_price_at_horizon')}, "
+        f"difficulty_growth_pct_year={assumptions.get('difficulty_growth_pct_year')}, "
+        f"electricity={assumptions.get('electricity_usd_kwh')}, "
+        f"setup_per_unit={assumptions.get('setup_cost_usd_per_unit')}, "
+        f"hosting_per_unit_month={assumptions.get('hosting_cost_usd_per_unit_month')}, "
+        f"maintenance_per_unit_month={assumptions.get('maintenance_cost_usd_per_unit_month')}, "
+        f"resale_per_unit={assumptions.get('hardware_resale_value_usd_per_unit')}\n"
+        f"Buy path: btc_bought={buy.get('btc_bought')}, "
+        f"value_at_horizon={buy.get('value_at_horizon')}\n"
+        f"Mine path: units={mining.get('units')}, equipment={mining.get('equipment_cost')}, "
+        f"working_capital={mining.get('remaining_working_capital')}, "
+        f"opex={mining.get('total_operating_cost')}, "
+        f"shortfall_usd={mining.get('opex_shortfall_usd')}, "
+        f"end_cash={mining.get('end_cash')}, "
+        f"residual={mining.get('residual_hardware_value')}, "
+        f"net_btc_after_opex={mining.get('net_btc_after_opex')}, "
+        f"value_at_horizon={mining.get('value_at_horizon')}\n"
+        f"Verdict: {verdict} | break_even_price_at_horizon={be}\n\n"
+        "Answer: (1) which path wins and why, (2) confirm the capital accounting "
+        "reconciles or flag the gap, (3) the one assumption most likely to flip "
+        "the verdict."
+    )
+    return await generate(
+        system,
+        user,
+        fallback,
+        job="mine_vs_buy_review",
+        user_id=user_id,
+        simulation=simulation,
+        extra={"mine_vs_buy": context},
+    )
+
+
+async def capital_review_for(
+    context: Dict,
+    *,
+    user_id: Optional[str] = None,
+    simulation: bool = False,
+) -> str:
+    """AI Capital Council review of a capital allocation run + proposal.
+
+    Reviews ONLY the numbers it is given. Observed-live vs assumption evidence
+    is passed through so the council can separate live facts from operator
+    assumptions, and it never endorses execution — the optimizer proposes, a
+    human decides.
+    """
+    lanes = context.get("lanes", {})
+    ranking = context.get("ranking", [])
+    rec = context.get("recommendation", {})
+    pct = rec.get("proposed_pct", {})
+    observed = context.get("observed", {})
+    sim = context.get("simulation", False)
+
+    def _lane_line(key: str) -> str:
+        lane = lanes.get(key)
+        if not lane:
+            return f"{key}: (missing)"
+        if not lane.get("available"):
+            return f"{key}: unavailable ({lane.get('reason', 'n/a')})"
+        ppm = lane.get("profit_per_mw")
+        ppm_s = f"{ppm:,.0f}/MW/mo" if ppm is not None else "n/a"
+        return (
+            f"{key}: avail, capital=${lane.get('capital_allocated', 0):,.0f}, "
+            f"profit_month=${lane.get('operating_profit_month', 0):,.0f}, "
+            f"ppm={ppm_s}, payback={lane.get('simple_payback_days')}d, "
+            f"flags={lane.get('risk_flags')}"
+        )
+
+    fallback = (
+        f"AI Capital Council: capital ${context.get('capital_usd', 0):,.0f}, "
+        f"{context.get('available_mw', 0)} MW, {context.get('horizon_months', 0)} months. "
+        "Lane ranking: " + ", ".join(ranking or []) + ". "
+        f"Proposal (proposal only): {pct}. "
+        "Observed-live data: BTC price "
+        f"${observed.get('btc_price')} ({observed.get('btc_price_provider')}). "
+        "Mining network and BTC price are the only live-observed inputs; GPU and "
+        "energy economics are operator assumptions. Nothing here executes without "
+        "human approval. Not financial advice."
+    )
+
+    system = (
+        "You are the AI Capital Council for a digital-infrastructure operator. "
+        "You review a capital allocation proposal using ONLY the provided numbers. "
+        "Separate observed-live data (BTC price, mining network) from operator "
+        "assumptions (GPU/energy economics, horizon prices). Stress-test the "
+        "proposal, name the single assumption most likely to flip it, and always "
+        "remind the reader the optimizer proposes only — nothing is executed "
+        "without human approval. Under 140 words. "
+        f"{_DISCLAIMER}"
+    )
+    lane_block = "\n".join(f"- {_lane_line(k)}" for k in ("btc", "mining", "gpu", "energy"))
+    user = (
+        "Review this capital allocation run and proposal.\n\n"
+        f"Capital: ${context.get('capital_usd', 0):,.0f} | "
+        f"MW available: {context.get('available_mw', 0)} | "
+        f"Horizon: {context.get('horizon_months', 0)} months | "
+        f"Risk profile: {context.get('risk_profile')} | "
+        f"Simulation mode: {sim}\n"
+        f"Observed (live): BTC ${observed.get('btc_price')} "
+        f"({observed.get('btc_price_provider')}, "
+        f"observed={observed.get('btc_price_observed')}); network "
+        f"hashrate={observed.get('network', {}).get('hashrate_ths')} "
+        f"({observed.get('network', {}).get('source')})\n"
+        "Lanes:\n"
+        f"{lane_block}\n"
+        f"Ranking: {ranking}\n"
+        f"Proposal pct: {pct}\n"
+        f"Proposal basis: {rec.get('basis')}\n\n"
+        "Answer: (1) is the proposal coherent with the lane economics, "
+        "(2) the biggest assumption risk, (3) what a human should verify "
+        "before approving."
+    )
+    return await generate(
+        system,
+        user,
+        fallback,
+        job="capital_allocation_review",
+        user_id=user_id,
+        simulation=simulation,
+        extra={"capital_allocation": context},
     )

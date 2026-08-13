@@ -154,26 +154,38 @@ async def estimate(
     asic = _catalog_item(payload.asic_model, payload.model_dump())
     network, btc_price, simulation, prov = await _live_context()
 
+    # Evidence integrity: a user-entered BTC price is NOT an observed market
+    # observation. It must be labeled user_input, never the live provider.
+    if payload.btc_price is not None:
+        effective_price = payload.btc_price
+        price_provider = "user_input"
+        price_observed = False
+    else:
+        effective_price = btc_price
+        price_provider = prov["provider"]
+        price_observed = True
+
     est = compute_estimate(
         hashrate_ths=asic["hashrate_ths"],
         power_watts=asic["power_watts"],
         electricity_usd_kwh=payload.electricity_usd_kwh,
         pool_fee_pct=payload.pool_fee_pct,
         uptime_pct=payload.uptime_pct,
-        btc_price=payload.btc_price or btc_price,
+        btc_price=effective_price,
         hardware_cost_usd=asic["price_usd"],
         network=network,
     )
 
     flat = _estimate_flat(
-        asic, payload.btc_price or btc_price, prov["provider"], network, est,
+        asic, effective_price, price_provider, network, est,
         electricity_usd_kwh=payload.electricity_usd_kwh,
         pool_fee_pct=payload.pool_fee_pct,
         uptime_pct=payload.uptime_pct,
     )
     observed = {
-        "btc_price": payload.btc_price or btc_price,
-        "btc_price_provider": prov["provider"],
+        "btc_price": effective_price,
+        "btc_price_provider": price_provider,
+        "btc_price_observed": price_observed,
         "network": network_data_dict(network),
     }
     assumptions = {
@@ -198,6 +210,8 @@ async def estimate(
             context = {
                 "asic": asic,
                 "btc_price": flat["btc_price"],
+                "btc_price_provider": price_provider,
+                "btc_price_observed": price_observed,
                 "electricity_usd_kwh": payload.electricity_usd_kwh,
                 "pool_fee_pct": payload.pool_fee_pct,
                 "uptime_pct": payload.uptime_pct,
@@ -212,7 +226,7 @@ async def estimate(
         simulation=simulation,
         asic=asic,
         btc_price=flat["btc_price"],
-        btc_price_provider=prov["provider"],
+        btc_price_provider=price_provider,
         network=MiningNetworkData(**network_data_dict(network)),
         estimates=est,
         ai_review=ai_review,
@@ -239,10 +253,15 @@ async def mine_vs_buy(
         difficulty_growth_pct_year=payload.difficulty_growth_pct_year,
         btc_price_at_horizon=payload.btc_price_at_horizon or btc_price,
         network=network,
+        setup_cost_usd_per_unit=payload.setup_cost_usd_per_unit,
+        hosting_cost_usd_per_unit_month=payload.hosting_cost_usd_per_unit_month,
+        maintenance_cost_usd_per_unit_month=payload.maintenance_cost_usd_per_unit_month,
+        hardware_resale_value_usd_per_unit=payload.hardware_resale_value_usd_per_unit,
     )
     result["asic"] = asic
     result["simulation"] = simulation
     result["observed"]["btc_price_provider"] = prov["provider"]
+    result["observed"]["btc_price_observed"] = True
 
     receipt_id = await _persist_mining_receipt(
         user_id=current_user["_id"],
@@ -263,6 +282,23 @@ async def mine_vs_buy(
         assumptions=result["assumptions"],
     )
 
+    ai_review = None
+    if await try_consume_ai_review(current_user):
+        ai_review = await ai.mine_vs_buy_review_for(
+            {
+                "capital_usd": payload.capital_usd,
+                "btc_price": btc_price,
+                "btc_price_provider": prov["provider"],
+                "buy_path": result["buy_path"],
+                "mining_path": result["mining_path"],
+                "assumptions": result["assumptions"],
+                "verdict": result["verdict"],
+                "break_even_price_at_horizon": result["break_even_price_at_horizon"],
+            },
+            user_id=current_user["_id"],
+            simulation=simulation,
+        )
+
     return MineVsBuyResult(
         simulation=simulation,
         asic=asic,
@@ -272,7 +308,7 @@ async def mine_vs_buy(
         mining_path=result["mining_path"],
         break_even_price_at_horizon=result["break_even_price_at_horizon"],
         verdict=result["verdict"],
-        ai_review=None,
+        ai_review=ai_review,
         receipt_id=receipt_id,
     )
 

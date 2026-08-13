@@ -357,6 +357,10 @@ class MineVsBuyRequest(BaseModel):
     horizon_days: int = Field(ge=1, le=3650, default=365)
     difficulty_growth_pct_year: float = Field(default=20.0)
     btc_price_at_horizon: Optional[float] = Field(default=None, gt=0)
+    setup_cost_usd_per_unit: float = Field(ge=0, default=0.0)
+    hosting_cost_usd_per_unit_month: float = Field(ge=0, default=0.0)
+    maintenance_cost_usd_per_unit_month: float = Field(ge=0, default=0.0)
+    hardware_resale_value_usd_per_unit: float = Field(ge=0, default=0.0)
 
 
 class MineVsBuyResult(BaseModel):
@@ -472,6 +476,14 @@ class AllocationRequest(BaseModel):
     uptime_pct: float = Field(gt=0, le=100, default=95.0)
     energy_sell_price_usd_kwh: float = Field(ge=0, default=0.05)
     cash_interest_rate_pct_year: float = Field(ge=0, default=4.0)
+    gpu_model: Optional[str] = None
+    gpu_capex_usd: Optional[float] = Field(gt=0, default=None)
+    gpu_power_kw: Optional[float] = Field(gt=0, default=None)
+    gpu_cloud_rental_usd_per_hr: Optional[float] = Field(gt=0, default=None)
+    gpu_rental_usd_per_hr: Optional[float] = Field(gt=0, default=None)
+    gpu_utilization_pct: float = Field(gt=0, le=100, default=85.0)
+    gpu_uptime_pct: float = Field(gt=0, le=100, default=100.0)
+    gpu_units_cap: int = Field(gt=0, default=256)
 
 
 class AllocationOption(BaseModel):
@@ -506,4 +518,131 @@ class AllocationResult(BaseModel):
     ranking: List[str]
     ranking_basis: str
     ai_review: Optional[str] = None
+    receipt_id: Optional[str] = None
+
+
+class GpuEconomicsRequest(BaseModel):
+    gpu_model: Optional[str] = None
+    gpu_capex_usd: Optional[float] = Field(gt=0, default=None)
+    gpu_power_kw: Optional[float] = Field(gt=0, default=None)
+    gpu_cloud_rental_usd_per_hr: Optional[float] = Field(gt=0, default=None)
+    gpu_rental_usd_per_hr: Optional[float] = Field(gt=0, default=None)
+    electricity_usd_kwh: float = Field(gt=0, default=0.10)
+    gpu_utilization_pct: float = Field(gt=0, le=100, default=85.0)
+    gpu_uptime_pct: float = Field(gt=0, le=100, default=100.0)
+    capital_usd: float = Field(gt=0)
+    available_mw: float = Field(ge=0, default=0.0)
+    gpu_units_cap: int = Field(gt=0, default=256)
+
+
+class GpuLaneResult(BaseModel):
+    key: str
+    label: str
+    available: bool
+    reason: Optional[str] = None
+    units: int = 0
+    capital_deployed: float = 0.0
+    power_used_mw: float = 0.0
+    flow_day: float = 0.0
+    flow_month: float = 0.0
+    flow_unit: str = "usd_month_operating"
+    payback_days: Optional[float] = None
+    per_unit: Dict[str, Any] = Field(default_factory=dict)
+    risk_flags: List[str] = Field(default_factory=list)
+    assumptions: Dict[str, Any] = Field(default_factory=dict)
+
+
+class GpuEconomicsResult(BaseModel):
+    gpu: Dict[str, Any]
+    build: GpuLaneResult
+    cloud: GpuLaneResult
+    ai_review: Optional[str] = None
+    receipt_id: Optional[str] = None
+
+
+class CapitalRunRequest(BaseModel):
+    capital_usd: float = Field(gt=0)
+    available_mw: float = Field(ge=0, default=0.0)
+    horizon_months: int = Field(gt=0, le=60, default=12)
+    electricity_usd_kwh: float = Field(gt=0, default=0.06)
+    risk_profile: str = Field(default="balanced")
+    btc_price: Optional[float] = Field(default=None, gt=0)
+    btc_price_at_horizon: Optional[float] = Field(default=None, gt=0)
+    difficulty_growth_pct_year: float = Field(ge=0, default=20.0)
+    asic_model: Optional[str] = Field(default=None)
+    hashrate_ths: Optional[float] = None
+    power_watts: Optional[float] = None
+    hardware_cost_usd: Optional[float] = None
+    pool_fee_pct: float = Field(ge=0, default=1.0)
+    uptime_pct: float = Field(gt=0, le=100, default=95.0)
+    setup_cost_usd_per_unit: float = Field(ge=0, default=0.0)
+    hosting_cost_usd_per_unit_month: float = Field(ge=0, default=0.0)
+    maintenance_cost_usd_per_unit_month: float = Field(ge=0, default=0.0)
+    hardware_resale_value_usd_per_unit: float = Field(ge=0, default=0.0)
+    gpu_model: Optional[str] = Field(default=None)
+    gpu_capex_usd: Optional[float] = Field(default=None, gt=0)
+    gpu_power_kw: Optional[float] = Field(default=None, gt=0)
+    gpu_cloud_rental_usd_per_hr: Optional[float] = Field(default=None, gt=0)
+    gpu_rental_usd_per_hr: Optional[float] = Field(default=None, gt=0)
+    gpu_utilization_pct: float = Field(gt=0, le=100, default=85.0)
+    gpu_uptime_pct: float = Field(gt=0, le=100, default=100.0)
+    gpu_units_cap: int = Field(gt=0, default=256)
+    gpu_pue: float = Field(ge=1.0, default=1.3)
+    energy_acquisition_usd_kwh: Optional[float] = Field(default=None, gt=0)
+    energy_sell_price_usd_kwh: Optional[float] = Field(default=None, gt=0)
+    energy_utilization_pct: float = Field(gt=0, le=100, default=100.0)
+    storage_mwh: float = Field(ge=0, default=0.0)
+    storage_capex_usd_per_mwh: float = Field(ge=0, default=0.0)
+    storage_roundtrip_pct: float = Field(gt=0, le=100, default=85.0)
+    cash_interest_rate_pct_year: float = Field(ge=0, default=4.0)
+
+
+class CapitalRunResult(BaseModel):
+    simulation: bool
+    inputs: Dict[str, Any]
+    observed: Dict[str, Any]
+    lanes: Dict[str, Any]
+    ranking: List[str]
+    ranking_basis: str
+    recommendation: Dict[str, Any]
+    ai_review: Optional[str] = None
+    receipt_id: Optional[str] = None
+
+
+class CapitalScenarioRequest(BaseModel):
+    run: CapitalRunRequest
+    vectors: Optional[List[str]] = None
+
+
+class CapitalScenarioRow(BaseModel):
+    label: str
+    vector: Dict[str, Any]
+    btc_price: Optional[float] = None
+    difficulty: Optional[float] = None
+    lanes: Dict[str, Any]
+
+
+class CapitalScenarioResult(BaseModel):
+    base: Dict[str, Any]
+    matrix: List[CapitalScenarioRow]
+    scenario_keys: List[str]
+    disclaimer: str
+
+
+class CapitalOptimizeRequest(BaseModel):
+    capital_usd: float = Field(gt=0)
+    available_mw: float = Field(ge=0, default=0.0)
+    horizon_months: int = Field(gt=0, le=60, default=12)
+    electricity_usd_kwh: float = Field(gt=0, default=0.06)
+    asic_model: Optional[str] = Field(default=None)
+    hashrate_ths: Optional[float] = None
+    power_watts: Optional[float] = None
+    hardware_cost_usd: Optional[float] = None
+    risk_profiles: List[str] = Field(default_factory=lambda: ["conservative", "balanced", "aggressive"])
+
+
+class CapitalOptimizeResult(BaseModel):
+    base: Dict[str, Any]
+    proposals: Dict[str, Any]
+    disclaimer: str
     receipt_id: Optional[str] = None

@@ -249,10 +249,37 @@ def mine_vs_buy(
     difficulty_growth_pct_year: float,
     btc_price_at_horizon: float,
     network: NetworkData,
+    setup_cost_usd_per_unit: float = 0.0,
+    hosting_cost_usd_per_unit_month: float = 0.0,
+    maintenance_cost_usd_per_unit_month: float = 0.0,
+    hardware_resale_value_usd_per_unit: float = 0.0,
 ) -> Dict:
+    """Compare buying BTC outright vs. mining it, reconciled against the SAME
+    starting dollars.
+
+    Capital accounting (every dollar of ``capital_usd`` is accounted for on both
+    paths):
+
+    BUY path
+        capital_usd -> BTC bought at entry price -> value at horizon price.
+
+    MINE path
+        capital_usd = equipment_cost + setup_cost + remaining_working_capital
+        remaining_working_capital funds operating costs (power, hosting,
+        maintenance). Any operating-cost shortfall beyond working capital is
+        funded by selling mined BTC at the horizon price.
+        End value = end_cash + residual_hardware_value + net_btc * horizon_price
+        where net_btc = mined_btc - shortfall_usd / horizon_price.
+
+    Break-even price has a closed form because net_btc * price collapses the
+    shortfall conversion back to USD:
+        end_cash + resale + mined*P - shortfall == buy_btc * P
+        ->  P = (shortfall - end_cash - resale) / (mined - buy_btc),  P > 0
+    """
     units = int(capital_usd // asic["price_usd"]) if asic["price_usd"] > 0 else 0
-    hardware_cost = units * asic["price_usd"]
-    leftover = max(0.0, capital_usd - hardware_cost)
+    equipment_cost = units * asic["price_usd"]
+    setup_cost = units * setup_cost_usd_per_unit
+    remaining_working_capital = capital_usd - equipment_cost - setup_cost
 
     buy_path_btc = capital_usd / btc_price if btc_price > 0 else 0.0
 
@@ -261,6 +288,15 @@ def mine_vs_buy(
             "units": 0,
             "available": False,
             "reason": f"Insufficient capital for one {asic['model']} (needs ~${asic['price_usd']:,.0f}).",
+        }
+    elif remaining_working_capital < 0:
+        mining_path = {
+            "units": units,
+            "available": False,
+            "reason": (
+                f"Equipment + setup cost ${equipment_cost + setup_cost:,.0f} exceeds "
+                f"capital of ${capital_usd:,.0f}."
+            ),
         }
     else:
         # Difficulty compounds over the horizon; use the mid-horizon difficulty
@@ -281,20 +317,44 @@ def mine_vs_buy(
         power_kwh_day = (asic["power_watts"] / 1000.0) * 24.0 * (uptime_pct / 100.0) * units
         total_power_kwh = power_kwh_day * horizon_days
         total_power_cost = total_power_kwh * electricity_usd_kwh
-        # Power paid out of capital; express holdings in BTC terms using the
-        # horizon price assumption so both paths are compared in the same unit.
-        net_btc = mined_btc - (total_power_cost / btc_price_at_horizon) if btc_price_at_horizon > 0 else mined_btc
+
+        months = horizon_days / 30.0
+        hosting_cost_total = units * hosting_cost_usd_per_unit_month * months
+        maintenance_cost_total = units * maintenance_cost_usd_per_unit_month * months
+        total_operating_cost = total_power_cost + hosting_cost_total + maintenance_cost_total
+
+        # Operating costs are funded from working capital first; any shortfall
+        # is covered by selling mined BTC at the horizon price.
+        cash_funded_opex = min(remaining_working_capital, total_operating_cost)
+        opex_shortfall_usd = max(0.0, total_operating_cost - remaining_working_capital)
+        end_cash = remaining_working_capital - cash_funded_opex
+        residual_hardware_value = units * hardware_resale_value_usd_per_unit
+        net_btc = (
+            mined_btc - (opex_shortfall_usd / btc_price_at_horizon)
+            if btc_price_at_horizon > 0 else mined_btc
+        )
+        end_value_at_horizon = end_cash + residual_hardware_value + net_btc * btc_price_at_horizon
+
         mining_path = {
             "units": units,
             "available": True,
-            "hardware_cost": hardware_cost,
-            "leftover_cash": leftover,
+            "capital_reconciled": True,
+            "equipment_cost": equipment_cost,
+            "setup_cost": setup_cost,
+            "remaining_working_capital": remaining_working_capital,
+            "power_kwh_day": power_kwh_day,
             "total_power_kwh": total_power_kwh,
             "total_power_cost": total_power_cost,
-            "total_operating_cost": hardware_cost + total_power_cost,
+            "hosting_cost_total": hosting_cost_total,
+            "maintenance_cost_total": maintenance_cost_total,
+            "total_operating_cost": total_operating_cost,
+            "cash_funded_opex": cash_funded_opex,
+            "opex_shortfall_usd": opex_shortfall_usd,
+            "end_cash": end_cash,
+            "residual_hardware_value": residual_hardware_value,
             "mined_btc": mined_btc,
-            "net_btc_after_power": net_btc,
-            "value_at_horizon": net_btc * btc_price_at_horizon,
+            "net_btc_after_opex": net_btc,
+            "value_at_horizon": end_value_at_horizon,
         }
 
     buy_path = {
@@ -304,12 +364,14 @@ def mine_vs_buy(
 
     break_even_price = None
     if mining_path.get("available") and buy_path_btc > 0:
-        # Solve net_btc == buy_path_btc for price_at_horizon (power cost in BTC
-        # terms falls as price rises, so this is a simple scalar solve).
+        # Closed-form solve of end_cash + resale + mined*P - shortfall == buy_btc*P.
         mined = mining_path["mined_btc"]
-        power_cost = mining_path["total_power_cost"]
-        if mined > buy_path_btc:
-            break_even_price = power_cost / (mined - buy_path_btc) if mined != buy_path_btc else None
+        shortfall = mining_path["opex_shortfall_usd"]
+        constant = mining_path["end_cash"] + mining_path["residual_hardware_value"]
+        if mined != buy_path_btc:
+            candidate = (shortfall - constant) / (mined - buy_path_btc)
+            if candidate > 0:
+                break_even_price = candidate
 
     return {
         "observed": {
@@ -323,14 +385,17 @@ def mine_vs_buy(
             "electricity_usd_kwh": electricity_usd_kwh,
             "pool_fee_pct": pool_fee_pct,
             "uptime_pct": uptime_pct,
-            "hardware_resale_value_usd": 0,
+            "setup_cost_usd_per_unit": setup_cost_usd_per_unit,
+            "hosting_cost_usd_per_unit_month": hosting_cost_usd_per_unit_month,
+            "maintenance_cost_usd_per_unit_month": maintenance_cost_usd_per_unit_month,
+            "hardware_resale_value_usd_per_unit": hardware_resale_value_usd_per_unit,
         },
         "buy_path": buy_path,
         "mining_path": mining_path,
         "break_even_price_at_horizon": break_even_price,
         "verdict": (
             "Mining beats buying outright"
-            if mining_path.get("available") and mining_path["net_btc_after_power"] > buy_path_btc
+            if mining_path.get("available") and mining_path["value_at_horizon"] > buy_path["value_at_horizon"]
             else "Buying outright beats mining on these assumptions"
         ),
     }
