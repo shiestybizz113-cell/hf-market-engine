@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.core.database import connect_to_mongo, close_mongo_connection
 from app.core.config import settings
-from app.api import auth, market, trading, system, execution, journal, billing, evidence, mining, decision, capital
+from app.api import auth, market, trading, system, execution, journal, billing, evidence, mining, decision, capital, receipts
 from app.services.receipt_service import paper_trade_receipt_service
 
 
@@ -56,6 +56,7 @@ app.include_router(evidence.router, prefix="/api")
 app.include_router(mining.router, prefix="/api")
 app.include_router(decision.router, prefix="/api")
 app.include_router(capital.router, prefix="/api")
+app.include_router(receipts.router, prefix="/api")
 
 
 @app.get("/")
