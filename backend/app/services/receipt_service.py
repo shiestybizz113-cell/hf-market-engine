@@ -95,7 +95,7 @@ class PaperTradeReceiptService:
             ),
             authority=Authority(
                 authority_basis=AuthorityBasis.STANDING_AUTHORITY,
-                scope=f"paper_trade.user:{user_id}",
+                scope="paper_trade.phase1.user_authorized",
             ),
             action=Action(
                 action_type=ActionType.TRADE_ORDER,
