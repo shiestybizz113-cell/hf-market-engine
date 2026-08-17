@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from app.models.schemas import PaperTradeCreate, PaperTradeOut, AssetClass
 from app.services.market_data import market_data_service
+from app.services.receipt_service import paper_trade_receipt_service
 from app.engines.risk_engine import risk_engine
 from app.core.database import get_db
 from app.engines.journal_engine import journal_engine
@@ -49,8 +50,44 @@ class PaperTradingEngine:
             "ai_review": None,
         }
 
+        # Build the immutable receipt before the trade is written so the trade
+        # and receipt share a stable id link from their first durable form.
+        signed_receipt = paper_trade_receipt_service.build_paper_trade_receipt(
+            user_id, trade
+        )
+        trade["receipt_id"] = signed_receipt.receipt_id
+        trade["receipt_status"] = "pending"
+
         db = get_db()
         await db.paper_trades.insert_one(trade)
+
+        try:
+            await paper_trade_receipt_service.persist_and_verify(
+                signed_receipt,
+                user_id=user_id,
+                source_trade_id=trade["_id"],
+            )
+        except Exception as exc:
+            # Standalone Mongo in Phase 1 has no cross-document transaction.
+            # Preserve the failed evidence state rather than deleting history or
+            # returning an apparently-active paper position without a receipt.
+            failure = {
+                "status": "evidence_failed",
+                "receipt_status": "failed",
+                "receipt_error": str(exc),
+            }
+            await db.paper_trades.update_one({"_id": trade["_id"]}, {"$set": failure})
+            trade.update(failure)
+            raise ValueError(
+                "Paper trade retained as evidence_failed because its Receipt v1.1 "
+                f"could not be durably verified: {exc}"
+            ) from exc
+
+        await db.paper_trades.update_one(
+            {"_id": trade["_id"]},
+            {"$set": {"receipt_status": "verified"}},
+        )
+        trade["receipt_status"] = "verified"
         return self._to_out(trade)
 
     async def close_trade(self, user_id: str, trade_id: str) -> PaperTradeOut:
@@ -140,6 +177,8 @@ class PaperTradingEngine:
             opened_at=t["opened_at"],
             closed_at=t.get("closed_at"),
             ai_review=t.get("ai_review"),
+            receipt_id=t.get("receipt_id"),
+            receipt_status=t.get("receipt_status"),
         )
 
 
