@@ -1,0 +1,53 @@
+name: Receipt Graph
+
+on:
+  pull_request:
+    paths:
+      - "backend/receipts/**"
+      - "backend/app/services/receipt_service.py"
+      - "backend/app/engines/paper_trading.py"
+      - "backend/app/api/receipts.py"
+      - "backend/app/core/database.py"
+      - "backend/app/main.py"
+      - "backend/tests/test_receipt*.py"
+      - "backend/requirements.txt"
+      - ".github/workflows/receipt-graph.yml"
+  workflow_dispatch:
+
+jobs:
+  receipt-graph:
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      ENVIRONMENT: development
+      MARKET_DATA_MODE: demo
+      MONGODB_URL: mongodb://localhost:27017
+      MONGODB_DB: hf_receipt_ci
+      SECRET_KEY: receipt-ci-only-not-production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Run Receipt Graph unit and Mongo integration tests
+        working-directory: backend
+        run: python -m unittest discover -s tests -p 'test_receipt*.py' -v
