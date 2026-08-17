@@ -17,6 +17,9 @@ async def connect_to_mongo():
     await db.portfolio.create_index([("user_id", 1), ("symbol", 1)])
     await db.journal.create_index([("user_id", 1), ("trade_date", -1)])
     await db.execution_orders.create_index([("user_id", 1), ("created_at", -1)])
+    await db.receipts.create_index("source_trade_id", unique=True, sparse=True)
+    await db.receipts.create_index([("user_id", 1), ("created_at", -1)])
+    await db.receipts.create_index("signer_key_id")
     print(f"Connected to MongoDB: {settings.MONGODB_DB}")
 
 
