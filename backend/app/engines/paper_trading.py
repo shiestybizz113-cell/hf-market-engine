@@ -97,6 +97,10 @@ class PaperTradingEngine:
             raise ValueError("Trade not found")
         if trade["status"] == "closed":
             raise ValueError("Trade already closed")
+        if trade["status"] == "evidence_failed":
+            raise ValueError(
+                "Trade evidence failed; it is retained for audit but is not an active position."
+            )
 
         quote = await market_data_service.get_quote(
             trade["asset"], AssetClass(trade["asset_class"])
@@ -177,8 +181,6 @@ class PaperTradingEngine:
             opened_at=t["opened_at"],
             closed_at=t.get("closed_at"),
             ai_review=t.get("ai_review"),
-            receipt_id=t.get("receipt_id"),
-            receipt_status=t.get("receipt_status"),
         )
 
 
