@@ -1,7 +1,6 @@
 """
 Paper Trading Engine – simulated positions only.
 No real exchange execution in Phase 1.
-Integrated with Receipt Graph for evidence-based audit trail.
 """
 
 from datetime import datetime, timezone
@@ -13,9 +12,6 @@ from app.core.database import get_db
 from app.engines.journal_engine import journal_engine
 from app.core import ai
 import uuid
-
-# Import receipt functionality
-from app.services.receipts.paper_trade_receipt_service import paper_trade_receipt_service
 
 
 class PaperTradingEngine:
@@ -63,7 +59,7 @@ class PaperTradingEngine:
         if not trade:
             raise ValueError("Trade not found")
         if trade["status"] == "closed":
-           raise ValueError("Trade already closed")
+            raise ValueError("Trade already closed")
 
         quote = await market_data_service.get_quote(
             trade["asset"], AssetClass(trade["asset_class"])
@@ -84,25 +80,11 @@ class PaperTradingEngine:
         }
         await db.paper_trades.update_one({"_id": trade_id}, {"$set": update})
         trade.update(update)
-        
         # Auto journal entry
         try:
             await journal_engine.auto_from_paper_close(user_id, trade)
         except Exception:
             pass
-        
-        # Create and persist receipt for the closed trade
-        try:
-            paper_trade_out = self._to_out(trade)
-            receipt = await paper_trade_receipt_service.create_paper_trade_receipt(
-                paper_trade_out,
-                user_id
-            )
-            print(f"Created receipt for paper trade {trade_id}: {receipt.receipt_id}")
-        except Exception as e:
-            print(f"Warning: Failed to create receipt for paper trade {trade_id}: {e}")
-            # Don't fail the trade closure if receipt creation fails
-        
         return self._to_out(trade)
 
     async def list_trades(self, user_id: str, status: Optional[str] = None) -> List[PaperTradeOut]:

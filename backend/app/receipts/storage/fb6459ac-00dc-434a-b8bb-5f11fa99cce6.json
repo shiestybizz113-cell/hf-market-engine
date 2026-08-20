@@ -1,0 +1,68 @@
+{
+  "receipt_id": "fb6459ac-00dc-434a-b8bb-5f11fa99cce6",
+  "schema_version": "1.1",
+  "created_at": "2026-08-15T12:53:49.937067+00:00",
+  "actor": {
+    "agent_id": "demo-user-0aba5e4a-94ec-4afb-a4aa-b480270d81e3",
+    "agent_type": "paper_trading_agent",
+    "operator_org_id": "hf-market-engine"
+  },
+  "authority": {
+    "authority_receipt_id": null,
+    "authority_basis": "standing_authority",
+    "scope": "paper_trade.executed"
+  },
+  "action": {
+    "action_type": "trade_order",
+    "domain": "hf_market_engine.equities_paper",
+    "payload": {
+      "symbol": "AAPL",
+      "side": "long",
+      "qty": 10.0,
+      "order_type": "market",
+      "entry_price": 150.0,
+      "exit_price": 208.36,
+      "realized_pnl": 583.6
+    },
+    "payload_schema_ref": "https://hf-market-engine.dev/schemas/action/trade_order/v1.json"
+  },
+  "environment_state": {
+    "mode": "paper",
+    "environment_id": "hf-market-engine-phase1"
+  },
+  "claimed_outcome": {
+    "outcome_type": "fill",
+    "outcome_payload": {
+      "fill_price": 208.36,
+      "filled_qty": 10.0,
+      "pnl": 583.6
+    },
+    "outcome_timestamp": "2026-08-15T12:53:49.936957+00:00"
+  },
+  "verification": {
+    "status": "verified",
+    "method": "self_attested",
+    "verified_by": "hf-market-engine.paper_trading_engine",
+    "verified_at": null,
+    "evidence_state_label": "BUILT_NOT_YET_LIVE_VERIFIED",
+    "quarantine_reason": null
+  },
+  "provenance": {
+    "data_owner_org_id": "hf-market-engine",
+    "consent_basis": "internal_operational",
+    "retention_policy": "purge_after_90d",
+    "training_data_license": "licensable_aggregate_only",
+    "pii_present": false,
+    "training_extract_id": null
+  },
+  "graph_links": {
+    "parent_receipt_ids": [],
+    "related_receipt_ids": []
+  },
+  "integrity": {
+    "canonical_hash": "sha256:07b5c7f9e528703bf5fc3069af51440d44f687d6bf533dbb0cdc38b252b5b56c",
+    "signature": "f2e0476fb605bbdd33d7d4d8702d362e65301251cf56dc13c29eb91f2c59e27683c731efefab6fc221fefd629599c98ac2834192119a594bff21cdbd32ce1a0b",
+    "signer_public_key_id": "hf-market-engine-paper-trading-key-2026",
+    "signature_algorithm": "Ed25519"
+  }
+}
