@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.schemas import AssetClass
 from app.models.execution import (
@@ -224,7 +225,8 @@ class PaperExecutionEngine(ExecutionEngineProtocol):
         arrival = quote.price if quote else 100.0
 
         parent_id = str(uuid.uuid4())
-        children = await self._simulate_children(order, arrival, parent_id, now)
+        impact_ctx = self._impact_context(quote)
+        children = await self._simulate_children(order, arrival, parent_id, now, impact_ctx)
 
         total_filled = sum(c.filled_qty for c in children)
         notional = sum(c.filled_qty * (c.avg_price or arrival) for c in children)
@@ -254,9 +256,9 @@ class PaperExecutionEngine(ExecutionEngineProtocol):
             started_at=now,
             completed_at=now,
             implementation_shortfall_bps=shortfall_bps,
-            vwap_deviation_bps=round(random.uniform(-3, 6), 2),
+            vwap_deviation_bps=None,
             notes=order.notes,
-            risk_score_at_submission=round(random.uniform(25, 60), 1),
+            risk_score_at_submission=None,
         )
 
         doc = parent.model_dump(mode="json")
@@ -270,8 +272,55 @@ class PaperExecutionEngine(ExecutionEngineProtocol):
 
         return parent
 
+    # ------------------------------------------------------------------
+    # Impact model integration
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _impact_context(quote) -> dict:
+        """Extract ADV and volatility from a market quote for the impact model."""
+        if quote is None:
+            return {"adv": None, "sigma_daily": None}
+        adv = getattr(quote, "volume_24h", None)
+        high = getattr(quote, "high_24h", None)
+        low = getattr(quote, "low_24h", None)
+        sigma_daily = None
+        if high is not None and low is not None:
+            from app.services.market_impact import parkinson_sigma
+            sigma_daily = parkinson_sigma(high, low)
+        return {"adv": adv, "sigma_daily": sigma_daily}
+
+    @staticmethod
+    def _slice_impact_bps(
+        slice_qty: float,
+        total_qty: float,
+        order,
+        ctx: dict,
+    ) -> float:
+        """Return impact in bps for a single slice, or 0.0 when unavailable."""
+        mode = settings.IMPACT_MODEL
+
+        if mode == "none":
+            return 0.0
+
+        if mode == "legacy_random":
+            return random.uniform(0.5, 4.0) + (slice_qty / max(total_qty, 1e-9)) * random.uniform(0.5, 3.0)
+
+        # sqrt_law_v1
+        adv = ctx.get("adv")
+        sigma_daily = ctx.get("sigma_daily")
+        if adv is None or sigma_daily is None:
+            return 0.0
+        notional = slice_qty  # unitless ratio, same as qty for paper
+        from app.services.market_impact import estimate_impact
+        est = estimate_impact(notional, adv, sigma_daily=sigma_daily)
+        if est.impact_bps is None:
+            return 0.0
+        return est.impact_bps
+
     async def _simulate_children(
-        self, order: ParentOrderCreate, arrival: float, parent_id: str, now: datetime
+        self, order: ParentOrderCreate, arrival: float, parent_id: str, now: datetime,
+        impact_ctx: Optional[dict] = None,
     ) -> List[ChildOrder]:
         algo = order.algo.algo_type
         n = self._slice_count(algo, order.quantity, order.algo)
@@ -285,10 +334,9 @@ class PaperExecutionEngine(ExecutionEngineProtocol):
             slice_qty = self._slice_size(algo, order.quantity, n, i)
             slice_qty = min(slice_qty, remaining)
 
-            # Simulated impact / slippage (bps) grows with slice size.
-            impact = random.uniform(0.5, 4.0) + (slice_qty / max(order.quantity, 1e-9)) * random.uniform(0.5, 3.0)
+            impact_bps = self._slice_impact_bps(slice_qty, order.quantity, order, impact_ctx or {})
             side_dir = 1 if order.side == "buy" else -1
-            fill_price = arrival * (1 + side_dir * impact / 10000)
+            fill_price = arrival * (1 + side_dir * impact_bps / 10000)
             if order.limit_price:
                 fill_price = min(fill_price, order.limit_price) if order.side == "buy" else max(fill_price, order.limit_price)
 
@@ -372,7 +420,7 @@ class PaperExecutionEngine(ExecutionEngineProtocol):
             arrival_price=arrival,
             avg_fill_price=avg,
             implementation_shortfall_bps=float(doc.get("implementation_shortfall_bps") or 0),
-            vwap_benchmark=arrival * (1 + random.uniform(-0.002, 0.004)),
+            vwap_benchmark=None,
             vwap_deviation_bps=doc.get("vwap_deviation_bps"),
             total_fees=total_fees,
             total_notional=avg * float(doc.get("filled_qty") or 0),
@@ -380,8 +428,8 @@ class PaperExecutionEngine(ExecutionEngineProtocol):
             num_child_orders=len(childs),
             num_venues=len({c.get("venue") for c in childs}),
             duration_seconds=None,
-            participation_rate_realized=random.uniform(3, 12),
-            max_slice_impact_bps=round(random.uniform(2, 9), 2),
+            participation_rate_realized=None,
+            max_slice_impact_bps=None,
             venue_breakdown=[],
         )
 

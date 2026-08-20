@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     #             explicit opt-in (see market_providers.ProviderRegistry.force_demo).
     MARKET_DATA_MODE: str = "demo"
 
+    # Execution impact model:
+    #   "sqrt_law_v1" -> deterministic square-root law (default, honest)
+    #   "none"        -> impact fields are null, no fabricated numbers
+    #   "legacy_random" -> old random.uniform() behavior (debugging only)
+    IMPACT_MODEL: str = "sqrt_law_v1"
+
     # Archisynapse v1.1 — Ed25519 receipt signing key (hex).
     # Empty in dev = ephemeral key (receipts unverifiable across restarts).
     # REQUIRED in production: receipts without a stable key are worthless
@@ -125,6 +131,19 @@ class Settings(BaseSettings):
     def _validate_market_data_mode(self) -> "Settings":
         if self.MARKET_DATA_MODE not in ("demo", "live"):
             raise ValueError("MARKET_DATA_MODE must be 'demo' or 'live'")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_impact_model(self) -> "Settings":
+        valid = {"sqrt_law_v1", "none", "legacy_random"}
+        if self.IMPACT_MODEL not in valid:
+            raise ValueError(f"IMPACT_MODEL must be one of {valid}, got '{self.IMPACT_MODEL}'")
+        if self.ENVIRONMENT.lower() == "production" and self.IMPACT_MODEL == "legacy_random":
+            raise ValueError(
+                "IMPACT_MODEL=legacy_random is not allowed in production. "
+                "It reports fabricated random figures as execution costs. "
+                "Use 'sqrt_law_v1' or 'none' instead."
+            )
         return self
 
     class Config:
