@@ -16,3 +16,5 @@ tenacity==9.0.0
 redis==5.2.1
 email-validator==2.2.0
 stripe==11.4.1
+slowapi==0.1.9
+cryptography==44.0.0

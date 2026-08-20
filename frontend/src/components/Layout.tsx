@@ -7,6 +7,7 @@ import {
   LogOut, Search, Landmark
 } from 'lucide-react'
 import { getOverview } from '../services/api'
+import DataModeBanner from './DataModeBanner'
 
 const nav = [
   { section: 'Markets', items: [
@@ -98,6 +99,7 @@ export default function Layout() {
       </aside>
 
       <div className="main">
+        <DataModeBanner />
         <header className="topbar">
           <div className="flex gap-12" style={{ alignItems: 'center' }}>
             <form onSubmit={onSearch} className="flex gap-4" style={{ alignItems: 'center' }}>

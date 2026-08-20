@@ -20,6 +20,8 @@ from typing import Dict, Optional, Tuple
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.archisynapse import build_receipt, persist_receipt
+from app.core import alerting, budget
 
 _OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 _GROK_URL = "https://api.x.ai/v1/chat/completions"
@@ -93,7 +95,7 @@ async def _chat(system: str, user: str, max_tokens: int) -> Optional[str]:
         return None
 
 
-# ---------- Evidence receipts ----------
+# ---------- Evidence receipts (Archisynapse v1.1) ----------
 
 def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
@@ -115,31 +117,45 @@ async def _persist_receipt(
     fallback_used: bool,
     user_id: Optional[str] = None,
     extra: Optional[Dict] = None,
+    simulation: bool = False,
 ) -> None:
-    """Persist an analysis receipt best-effort. Never raises."""
+    """
+    Build a cryptographically signed Archisynapse v1.1 receipt and persist it.
+    Never raises — DB failures are logged, receipt_persisted flagged False.
+    """
     try:
         db = get_db()
         if db is None:
             return
-        in_tokens = _estimate_tokens(system) + _estimate_tokens(user)
-        out_tokens = _estimate_tokens(output)
-        receipt = {
-            "_id": str(uuid.uuid4()),
-            "job": job,
-            "user_id": user_id,
-            "system_prompt": system,
-            "user_prompt": user,
-            "output": output,
-            "model": model,
-            "provider": provider_name,
-            "fallback_used": fallback_used,
-            "tokens_estimate": {"input": in_tokens, "output": out_tokens},
-            "estimated_cost_usd": round(_estimate_cost(model, in_tokens, out_tokens), 6),
-            "generated_at": time.time(),
-        }
-        if extra:
-            receipt["extra"] = extra
-        await db["analysis_receipts"].insert_one(receipt)
+
+        receipt = build_receipt(
+            job=job,
+            system_prompt=system,
+            user_prompt=user,
+            output=output,
+            model=model,
+            provider_name=provider_name,
+            fallback_used=fallback_used,
+            simulation=simulation,
+            user_id=user_id,
+            extra=extra,
+        )
+
+        receipt_id, persisted = await persist_receipt(receipt, db)
+
+        if not persisted:
+            # HARNESS.md §5: receipt_persisted: false must not pass silently.
+            await alerting.fire(
+                alerting.RECEIPT_WRITE_FAILED,
+                f"Signed receipt could not be persisted for job '{job}'.",
+                context={
+                    "job": job,
+                    "user_id": user_id or "system",
+                    "receipt_id": receipt_id,
+                    "provider": provider_name,
+                    "model": model,
+                },
+            )
     except Exception:
         return
 
@@ -210,6 +226,7 @@ async def generate(
                 provider_name="simulation",
                 fallback_used=True,
                 user_id=user_id,
+                simulation=True,
                 extra={**(extra or {}), "simulation": True},
             )
         return text
@@ -218,6 +235,39 @@ async def generate(
         hit = _cache_get(cache_key)
         if hit is not None:
             return hit
+
+    # ── Spend enforcement gate (HARNESS.md §4) ────────────────────────────
+    # Checked AFTER the cache (cache hits cost nothing) and BEFORE any paid
+    # inference. When the cap is hit we return the rule-based fallback and
+    # never make the API call. This is the kill switch, not a dashboard.
+    budget_blocked = False
+    if settings.AI_BUDGET_ENFORCE:
+        try:
+            decision = await budget.check_budget(get_db(), user_id=user_id)
+            budget_blocked = decision.blocked
+        except Exception:
+            # Gate itself failed — do not block the user on an infra fault,
+            # but the ledger read inside check_budget already fails closed
+            # for the cases that matter.
+            budget_blocked = False
+
+    if budget_blocked:
+        text = fallback
+        if cache_key:
+            _cache_set(cache_key, text)
+        if job:
+            await _persist_receipt(
+                job,
+                system,
+                user,
+                text,
+                model=settings.AI_MODEL or default_model("gpt-4o-mini"),
+                provider_name="budget_blocked",
+                fallback_used=True,
+                user_id=user_id,
+                extra={**(extra or {}), "budget_blocked": True},
+            )
+        return text
 
     text = await _chat(system, user, max_tokens=settings.AI_MAX_TOKENS)
     fallback_used = text is None

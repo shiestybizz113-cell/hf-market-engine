@@ -3,6 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.core.database import connect_to_mongo, close_mongo_connection
 from app.core.config import settings
+from app.core.rate_limit import limiter, rate_limit_handler
+from app.core.security_headers import SecurityHeadersMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from app.api import auth, market, trading, system, execution, journal, billing, evidence, mining, decision, capital
 
 
@@ -24,6 +29,15 @@ app = FastAPI(
     version="0.1.0-phase1",
     lifespan=lifespan,
 )
+
+# ── Rate-limit harness ────────────────────────────────────────────────────────
+# Outer-loop enforcement: limiter state attached to app so SlowAPIMiddleware
+# can find it. Exception handler returns clean 429s instead of 500s.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
+app.add_middleware(SlowAPIMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+# ─────────────────────────────────────────────────────────────────────────────
 
 if settings.cors_origin_list:
     app.add_middleware(

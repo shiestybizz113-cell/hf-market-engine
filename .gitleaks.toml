@@ -1,0 +1,54 @@
+# .gitleaks.toml
+# Secret scanning rules for hf-market-engine.
+# Runs in CI before any other job. Fail = PR blocked.
+#
+# Gitleaks catches common patterns automatically.
+# These custom rules add project-specific coverage.
+
+title = "hf-market-engine secret rules"
+
+[[rules]]
+id = "hardcoded-secret-key"
+description = "Hardcoded SECRET_KEY value (not a reference)"
+regex = '''SECRET_KEY\s*=\s*["'][^${\s]{8,}["']'''
+tags = ["secret", "auth"]
+
+[[rules]]
+id = "hardcoded-stripe-key"
+description = "Stripe live secret key committed directly"
+regex = '''sk_live_[0-9a-zA-Z]{24,}'''
+tags = ["stripe", "payments"]
+
+[[rules]]
+id = "hardcoded-stripe-test-key"
+description = "Stripe test secret key committed directly"
+regex = '''sk_test_[0-9a-zA-Z]{24,}'''
+tags = ["stripe", "payments"]
+
+[[rules]]
+id = "hardcoded-openai-key"
+description = "OpenAI API key"
+regex = '''sk-[a-zA-Z0-9]{20,}T3BlbkFJ[a-zA-Z0-9]{20,}'''
+tags = ["ai", "openai"]
+
+[[rules]]
+id = "hardcoded-jwt-secret"
+description = "Hardcoded JWT secret fallback"
+regex = '''(jwt|JWT).*secret.*=.*["'][^${\s]{8,}["']'''
+tags = ["auth", "jwt"]
+
+[allowlist]
+# Files that intentionally reference example/placeholder values
+paths = [
+    ".env.ci",
+    ".env.example",
+    "docs/",
+    "README.md",
+    "HARNESS.md",
+]
+# Regexes for known safe patterns
+regexes = [
+    "dev-secret-change-in-production",
+    "ci-only-secret-key",
+    "ci-test-secret-key",
+]

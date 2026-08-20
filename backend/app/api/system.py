@@ -1,10 +1,11 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from datetime import datetime, timezone
 from app.models.schemas import SystemHealth, PlanInfo
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.plans import catalog_public
-from app.core import ai
+from app.core import ai, budget
+from app.api.auth import get_current_user
 import httpx
 
 router = APIRouter(tags=["system"])
@@ -54,6 +55,18 @@ async def health():
         saved_strategies=strategies,
         paper_trades=paper,
     )
+
+
+@router.get("/system/spend")
+async def ai_spend(current_user=Depends(get_current_user)):
+    """
+    Rolling 24h AI spend against the enforced caps.
+
+    Computed from the signed receipt ledger — the same append-only record
+    an auditor reads. Spend evidence and spend enforcement cannot disagree,
+    because they are the same data.
+    """
+    return await budget.spend_summary(get_db(), user_id=current_user["_id"])
 
 
 @router.get("/pricing/plans", response_model=list[PlanInfo])

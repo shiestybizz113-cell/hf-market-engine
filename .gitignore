@@ -4,12 +4,20 @@ __pycache__/
 .venv/
 venv/
 .env
+.env.local
+.env.production
+.env.*.local
+# .env.ci and .env.example are intentionally committed (no real keys)
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Node
 node_modules/
 dist/
 build/
 *.tsbuildinfo
+frontend/.vite/
 
 # Misc
 .DS_Store

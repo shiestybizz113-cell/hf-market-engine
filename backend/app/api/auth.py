@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from datetime import datetime, timezone
 from app.core.database import get_db
 from app.core.security import (
     get_password_hash, verify_password, create_access_token, decode_token, oauth2_scheme
 )
+from app.core.rate_limit import limiter, LOGIN_LIMIT, REGISTER_LIMIT
 from app.models.schemas import UserCreate, UserOut, Token
 import uuid
 
@@ -24,7 +25,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
 
 @router.post("/register", response_model=UserOut)
-async def register(payload: UserCreate):
+@limiter.limit(REGISTER_LIMIT)
+async def register(request: Request, payload: UserCreate):
     db = get_db()
     existing = await db.users.find_one({"email": payload.email.lower()})
     if existing:
@@ -49,7 +51,8 @@ async def register(payload: UserCreate):
 
 
 @router.post("/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+@limiter.limit(LOGIN_LIMIT)
+async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
     db = get_db()
     user = await db.users.find_one({"email": form_data.username.lower()})
     if not user or not verify_password(form_data.password, user["hashed_password"]):
