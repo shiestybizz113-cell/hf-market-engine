@@ -1,0 +1,4 @@
+# Public/runtime dependencies for Capital Command Center V2.
+# Keep the existing backend dependency set and add shared scale infrastructure.
+-r requirements.txt
+redis>=5.0,<6.0

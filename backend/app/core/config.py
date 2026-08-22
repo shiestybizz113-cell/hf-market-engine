@@ -10,9 +10,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
     ALGORITHM: str = "HS256"
 
-    # Comma-separated list of allowed CORS origins, e.g.
-    # https://app.example.com,https://staging.example.com
-    # "*" is only accepted while ENVIRONMENT != production.
+    # Comma-separated list of allowed CORS origins.
     CORS_ORIGINS: str = ""
 
     MONGODB_URL: str = "mongodb://localhost:27017"
@@ -26,16 +24,24 @@ class Settings(BaseSettings):
     FINNHUB_API_KEY: str = ""
 
     # Market data honesty contract:
-    #   "demo" -> DemoProvider only; every quote is labeled source=demo.
-    #   "live" -> real providers only; missing live data stays missing (no
-    #             automatic synthetic fill-in). Demo quotes then require an
-    #             explicit opt-in (see market_providers.ProviderRegistry.force_demo).
+    # demo -> labeled demo only; live -> real providers only, missing stays missing.
     MARKET_DATA_MODE: str = "demo"
+
+    # Capital V2 infrastructure feeds. These are canonical JSON feed endpoints;
+    # no feed configured means the corresponding lane remains reference/user
+    # assumption data rather than fake live data.
+    HARDWARE_OFFERS_URL: str = ""
+    HARDWARE_PROVIDER_ID: str = "hardware_feed"
+    GPU_OFFERS_URL: str = ""
+    GPU_PROVIDER_ID: str = "gpu_feed"
+    ENERGY_PRICES_URL: str = ""
+    ENERGY_PROVIDER_ID: str = "energy_feed"
+    INFRA_PROVIDER_BEARER_TOKEN: str = ""
+    INFRA_PROVIDER_TIMEOUT: float = 10.0
 
     OPENAI_API_KEY: str = ""
     GROK_API_KEY: str = ""
 
-    # AI analysis layer. Provider auto-detected from keys above (grok wins if both).
     AI_MODEL: str = ""
     AI_MAX_TOKENS: int = 200
     AI_TEMPERATURE: float = 0.4
@@ -50,7 +56,7 @@ class Settings(BaseSettings):
     PLAN_WHITELABEL_SETUP: int = 5000
     PLAN_WHITELABEL_MONTHLY: int = 1499
 
-    # Stripe — use sk_test_... + test price IDs for Test mode
+    # Stripe — use sk_test_... + test price IDs for Test mode.
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_PRICE_PRO: str = ""
@@ -70,19 +76,39 @@ class Settings(BaseSettings):
     def _validate_production(self) -> "Settings":
         if self.ENVIRONMENT.lower() != "production":
             return self
-        if not self.SECRET_KEY or len(self.SECRET_KEY) < 32:
+
+        secret_lower = (self.SECRET_KEY or "").lower()
+        if (
+            not self.SECRET_KEY
+            or len(self.SECRET_KEY) < 32
+            or "change-me" in secret_lower
+            or "dev-secret" in secret_lower
+            or "replace-me" in secret_lower
+        ):
             raise ValueError(
-                "SECRET_KEY must be a strong random value (>= 32 chars) in production"
+                "SECRET_KEY must be a real random value (>= 32 chars); example/dev placeholders are rejected in production"
             )
-        if not self.MONGODB_URL.startswith("mongodb://") or "mongodb://mongo:27017" in self.MONGODB_URL:
+
+        mongo_lower = (self.MONGODB_URL or "").lower()
+        if (
+            not self.MONGODB_URL.startswith("mongodb://")
+            or "mongodb://mongo:27017" in self.MONGODB_URL
+            or "change-me" in mongo_lower
+            or "replace-me" in mongo_lower
+        ):
             raise ValueError(
-                "MONGODB_URL must point at the mongo service with authenticated app "
-                "credentials (user:pass@mongo:27017) in production"
+                "MONGODB_URL must contain real authenticated app credentials in production; placeholder credentials are rejected"
             )
+
         if not self.cors_origin_list:
             raise ValueError("CORS_ORIGINS must be set to your real origin(s) in production")
         if "*" in self.cors_origin_list:
             raise ValueError("CORS_ORIGINS may not contain '*' in production")
+        if any("example.com" in origin.lower() for origin in self.cors_origin_list):
+            raise ValueError("CORS_ORIGINS still contains an example.com placeholder")
+
+        if self.INFRA_PROVIDER_TIMEOUT <= 0 or self.INFRA_PROVIDER_TIMEOUT > 60:
+            raise ValueError("INFRA_PROVIDER_TIMEOUT must be > 0 and <= 60 seconds")
         return self
 
     @model_validator(mode="after")

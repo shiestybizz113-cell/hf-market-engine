@@ -1,45 +1,53 @@
-from fastapi import APIRouter
 from datetime import datetime, timezone
-from app.models.schemas import SystemHealth, PlanInfo
-from app.core.database import get_db
-from app.core.config import settings
-from app.core.plans import catalog_public
-from app.core import ai
+
 import httpx
+from fastapi import APIRouter, Depends
+
+from app.api.auth import get_current_user
+from app.core import ai
+from app.core.config import settings
+from app.core.database import get_db
+from app.core.plans import catalog_public
+from app.models.schemas import PlanInfo, SystemHealth
 
 router = APIRouter(tags=["system"])
 
 
 @router.get("/system/health", response_model=SystemHealth)
-async def health():
+async def health(current_user=Depends(get_current_user)):
+    """Authenticated operator health — no global customer/business counts."""
     db_status = "ok"
-    cg_status = "unknown"
     try:
         db = get_db()
         await db.command("ping")
     except Exception:
         db_status = "error"
 
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.get("https://api.coingecko.com/api/v3/ping")
-            cg_status = "ok" if r.status_code == 200 else "degraded"
-    except Exception:
-        cg_status = "error"
+    # Do not turn a demo-mode operator dashboard into a recurring external ping.
+    if settings.MARKET_DATA_MODE == "demo":
+        cg_status = "demo"
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                response = await client.get("https://api.coingecko.com/api/v3/ping")
+                cg_status = "ok" if response.status_code == 200 else "degraded"
+        except Exception:
+            cg_status = "error"
 
-    active_users = 0
-    strategies = 0
-    paper = 0
-    try:
-        db = get_db()
-        active_users = await db.users.count_documents({})
-        strategies = await db.strategies.count_documents({})
-        paper = await db.paper_trades.count_documents({})
-    except Exception:
-        pass
+    # Keep the existing response contract but scope usage counters to the current
+    # operator. `active_users=1` means this authenticated session, not company
+    # registration/traction data.
+    saved_strategies = 0
+    paper_trades = 0
+    if db_status == "ok":
+        try:
+            db = get_db()
+            saved_strategies = await db.strategies.count_documents({"user_id": current_user["_id"]})
+            paper_trades = await db.paper_trades.count_documents({"user_id": current_user["_id"]})
+        except Exception:
+            pass
 
     ai_info = ai.provider_info()
-
     return SystemHealth(
         status="operational" if db_status == "ok" else "degraded",
         api="ok",
@@ -50,13 +58,12 @@ async def health():
         market_data_mode=settings.MARKET_DATA_MODE,
         auth="ok",
         last_market_refresh=datetime.now(timezone.utc),
-        active_users=active_users,
-        saved_strategies=strategies,
-        paper_trades=paper,
+        active_users=1,
+        saved_strategies=saved_strategies,
+        paper_trades=paper_trades,
     )
 
 
 @router.get("/pricing/plans", response_model=list[PlanInfo])
 async def pricing_plans():
     return [PlanInfo(**p) for p in catalog_public()]
-
