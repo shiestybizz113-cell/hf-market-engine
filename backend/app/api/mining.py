@@ -325,16 +325,6 @@ async def scenarios(
 ):
     asic = _catalog_item(payload.asic_model, payload.model_dump())
     network, btc_price, simulation, prov = await _live_context()
-    est = compute_estimate(
-        hashrate_ths=asic["hashrate_ths"],
-        power_watts=asic["power_watts"],
-        electricity_usd_kwh=payload.electricity_usd_kwh,
-        pool_fee_pct=payload.pool_fee_pct,
-        uptime_pct=payload.uptime_pct,
-        btc_price=btc_price,
-        hardware_cost_usd=asic["price_usd"],
-        network=network,
-    )
     base = {"network": network_data_dict(network)}
 
     rows = scenario_table(
