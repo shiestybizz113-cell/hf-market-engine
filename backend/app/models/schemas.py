@@ -627,6 +627,7 @@ class CapitalScenarioResult(BaseModel):
     matrix: List[CapitalScenarioRow]
     scenario_keys: List[str]
     disclaimer: str
+    receipt_id: Optional[str] = None
 
 
 class CapitalOptimizeRequest(BaseModel):

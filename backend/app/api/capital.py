@@ -389,6 +389,7 @@ async def capital_scenarios(
         matrix=[CapitalScenarioRow(**row) for row in matrix],
         scenario_keys=keys,
         disclaimer=_DISCLAIMER,
+        receipt_id=receipt_id,
     )
 
 
