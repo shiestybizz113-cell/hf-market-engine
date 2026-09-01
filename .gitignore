@@ -10,6 +10,7 @@ venv/
 # .env.ci and .env.example are intentionally committed (no real keys)
 .pytest_cache/
 .coverage
+coverage.json
 htmlcov/
 
 # Node
