@@ -5,16 +5,16 @@ Clearly labeled as simulated historical analysis.
 Architecture ready for real historical bar data later.
 """
 
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
-from app.models.schemas import BacktestRequest, BacktestResult, StrategyCreate
-from app.core import ai
 import random
 import uuid
+from typing import Any
+
+from app.core import ai
+from app.models.schemas import BacktestRequest, BacktestResult
 
 
 class BacktestEngine:
-    async def run(self, request: BacktestRequest, user_id: Optional[str] = None) -> BacktestResult:
+    async def run(self, request: BacktestRequest, user_id: str | None = None) -> BacktestResult:
         strategy = request.strategy
         name = strategy.name if strategy else "Unnamed Strategy"
 
@@ -33,7 +33,7 @@ class BacktestEngine:
 
         # Simple equity curve
         equity = 10000.0
-        curve: List[Dict[str, Any]] = [{"day": 0, "equity": equity}]
+        curve: list[dict[str, Any]] = [{"day": 0, "equity": equity}]
         for i in range(1, 61):
             daily = random.uniform(-1.8, 2.2)
             equity = max(equity * (1 + daily / 100), equity * 0.7)
@@ -67,7 +67,7 @@ class BacktestEngine:
             is_simulated=True,
         )
 
-    async def _ai_review(self, metrics: Dict[str, Any], user_id: Optional[str] = None) -> str:
+    async def _ai_review(self, metrics: dict[str, Any], user_id: str | None = None) -> str:
         return await ai.backtest_review_for(metrics, user_id=user_id)
 
 

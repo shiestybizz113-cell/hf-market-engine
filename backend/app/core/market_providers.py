@@ -16,11 +16,11 @@ Honesty contract (see settings.MARKET_DATA_MODE):
 """
 
 import random
-import httpx
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import UTC, datetime
+
+import httpx
 
 from app.core.config import settings
 from app.models.schemas import AssetClass
@@ -30,7 +30,7 @@ TWELVEDATA_URL = "https://api.twelvedata.com"
 PROVIDER_TIMEOUT = 8.0
 
 # symbol -> (coingecko id, display name, base demo price)
-CRYPTO_UNIVERSE: Dict[str, dict] = {
+CRYPTO_UNIVERSE: dict[str, dict] = {
     "BTC": {"id": "bitcoin", "name": "Bitcoin", "price": 61000.0},
     "ETH": {"id": "ethereum", "name": "Ethereum", "price": 3300.0},
     "SOL": {"id": "solana", "name": "Solana", "price": 150.0},
@@ -43,7 +43,7 @@ CRYPTO_UNIVERSE: Dict[str, dict] = {
     "MATIC": {"id": "matic-network", "name": "Polygon", "price": 0.82},
 }
 
-STOCK_UNIVERSE: Dict[str, dict] = {
+STOCK_UNIVERSE: dict[str, dict] = {
     "COIN": {"name": "Coinbase Global", "price": 230.0},
     "MSTR": {"name": "MicroStrategy", "price": 1450.0},
     "NVDA": {"name": "NVIDIA", "price": 980.0},
@@ -53,7 +53,7 @@ STOCK_UNIVERSE: Dict[str, dict] = {
     "AMZN": {"name": "Amazon", "price": 185.0},
 }
 
-ETF_UNIVERSE: Dict[str, dict] = {
+ETF_UNIVERSE: dict[str, dict] = {
     "SPY": {"name": "SPDR S&P 500 ETF", "price": 540.0},
     "QQQ": {"name": "Invesco QQQ Trust", "price": 470.0},
     "IWM": {"name": "iShares Russell 2000 ETF", "price": 205.0},
@@ -61,14 +61,14 @@ ETF_UNIVERSE: Dict[str, dict] = {
     "TLT": {"name": "iShares 20+ Year Treasury ETF", "price": 95.0},
 }
 
-MACRO_UNIVERSE: Dict[str, dict] = {
+MACRO_UNIVERSE: dict[str, dict] = {
     "DXY": {"name": "US Dollar Index", "price": 105.5},
     "XAUUSD": {"name": "Gold / USD", "price": 2380.0},
     "US10Y": {"name": "US 10-Year Yield", "price": 4.3},
 }
 
 
-def universe_for(asset_class: AssetClass) -> Dict[str, dict]:
+def universe_for(asset_class: AssetClass) -> dict[str, dict]:
     if asset_class == AssetClass.STOCK:
         return STOCK_UNIVERSE
     if asset_class == AssetClass.ETF:
@@ -87,20 +87,20 @@ class NormalizedQuote:
     provider: str
     source: str
     observed_at: datetime
-    change_24h: Optional[float] = None
-    change_7d: Optional[float] = None
-    change_30d: Optional[float] = None
-    volume_24h: Optional[float] = None
-    market_cap: Optional[float] = None
-    high_24h: Optional[float] = None
-    low_24h: Optional[float] = None
+    change_24h: float | None = None
+    change_7d: float | None = None
+    change_30d: float | None = None
+    volume_24h: float | None = None
+    market_cap: float | None = None
+    high_24h: float | None = None
+    low_24h: float | None = None
 
 
 class QuoteProvider(ABC):
     provider_id: str = "abstract"
 
     @abstractmethod
-    async def quotes(self, symbols: List[str], asset_class: AssetClass) -> List[NormalizedQuote]:
+    async def quotes(self, symbols: list[str], asset_class: AssetClass) -> list[NormalizedQuote]:
         """Fetch quotes. Never raise; omit symbols that cannot be fetched."""
 
 
@@ -114,7 +114,7 @@ class CoinGeckoProvider(QuoteProvider):
             else {}
         )
 
-    async def quotes(self, symbols: List[str], asset_class: AssetClass) -> List[NormalizedQuote]:
+    async def quotes(self, symbols: list[str], asset_class: AssetClass) -> list[NormalizedQuote]:
         if asset_class != AssetClass.CRYPTO:
             return []
         ids = [CRYPTO_UNIVERSE[s]["id"] for s in symbols if s in CRYPTO_UNIVERSE]
@@ -138,8 +138,8 @@ class CoinGeckoProvider(QuoteProvider):
         except Exception:
             return []
 
-        now = datetime.now(timezone.utc)
-        out: List[NormalizedQuote] = []
+        now = datetime.now(UTC)
+        out: list[NormalizedQuote] = []
         for sym in symbols:
             meta = CRYPTO_UNIVERSE.get(sym)
             if not meta:
@@ -193,12 +193,12 @@ class TwelveDataProvider(QuoteProvider):
             return self._MACRO_MAP.get(symbol, symbol)
         return symbol
 
-    async def quotes(self, symbols: List[str], asset_class: AssetClass) -> List[NormalizedQuote]:
+    async def quotes(self, symbols: list[str], asset_class: AssetClass) -> list[NormalizedQuote]:
         if asset_class == AssetClass.CRYPTO or not self._api_key:
             return []
         universe = universe_for(asset_class)
-        out: List[NormalizedQuote] = []
-        now = datetime.now(timezone.utc)
+        out: list[NormalizedQuote] = []
+        now = datetime.now(UTC)
         try:
             async with httpx.AsyncClient(timeout=PROVIDER_TIMEOUT) as client:
                 for sym in symbols:
@@ -240,7 +240,7 @@ class TwelveDataProvider(QuoteProvider):
         return out
 
     @staticmethod
-    def _to_float(v) -> Optional[float]:
+    def _to_float(v) -> float | None:
         try:
             if v in (None, "", "-", "--"):
                 return None
@@ -252,10 +252,10 @@ class TwelveDataProvider(QuoteProvider):
 class DemoProvider(QuoteProvider):
     provider_id = "demo"
 
-    async def quotes(self, symbols: List[str], asset_class: AssetClass) -> List[NormalizedQuote]:
+    async def quotes(self, symbols: list[str], asset_class: AssetClass) -> list[NormalizedQuote]:
         universe = universe_for(asset_class)
-        now = datetime.now(timezone.utc)
-        out: List[NormalizedQuote] = []
+        now = datetime.now(UTC)
+        out: list[NormalizedQuote] = []
         for sym in symbols:
             meta = universe.get(sym) or {"name": sym, "price": 100.0}
             drift = random.uniform(-0.035, 0.035)
@@ -292,7 +292,7 @@ class ProviderRegistry:
         Demo quotes keep source="demo" so they can never look live."""
         self._force_demo = enabled
 
-    def providers_for(self, asset_class: AssetClass) -> List[QuoteProvider]:
+    def providers_for(self, asset_class: AssetClass) -> list[QuoteProvider]:
         if self._force_demo or settings.MARKET_DATA_MODE == "demo":
             return [self._demo]
 
@@ -309,12 +309,12 @@ class ProviderRegistry:
         return await self._crypto.global_market()
 
     async def get_quotes(
-        self, symbols: List[str], asset_class: AssetClass
-    ) -> Dict[str, NormalizedQuote]:
+        self, symbols: list[str], asset_class: AssetClass
+    ) -> dict[str, NormalizedQuote]:
         """Fetch quotes from the mode-locked provider chain. No cross-provider
         fallback: a symbol that fails stays absent so the caller can decide
         how honestly to report the gap."""
-        seen: Dict[str, NormalizedQuote] = {}
+        seen: dict[str, NormalizedQuote] = {}
         for provider in self.providers_for(asset_class):
             for q in await provider.quotes(symbols, asset_class):
                 seen.setdefault(q.symbol, q)

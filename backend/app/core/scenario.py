@@ -16,15 +16,15 @@ Evidence contract: every run is grounded in live observed data when the mode is
 live (demo otherwise) and the receipt separates observed from assumptions.
 """
 
-from typing import Dict, List, Optional
 
 from app.core.mining import (
-    NetworkData, compute_estimate,
+    NetworkData,
+    compute_estimate,
 )
 
 # Named institutional scenarios. Each is a full vector (not just price), so the
 # stress case is "everything moves against you", not a one-variable shock.
-SCENARIO_PRESETS: Dict[str, dict] = {
+SCENARIO_PRESETS: dict[str, dict] = {
     "stress": {
         "label": "Stress — BTC falls, difficulty rises, power up, uptime down",
         "btc_price_shift_pct": -25.0,
@@ -56,7 +56,7 @@ SCENARIO_PRESETS: Dict[str, dict] = {
 }
 
 
-def _risk_flags(est: Dict, electricity_usd_kwh: float) -> List[str]:
+def _risk_flags(est: dict, electricity_usd_kwh: float) -> list[str]:
     """Honest, mechanical risk labels. No single 'score' — a list of facts."""
     flags = []
     profit = est.get("operating_profit_day")
@@ -82,7 +82,7 @@ def _risk_flags(est: Dict, electricity_usd_kwh: float) -> List[str]:
 
 def run_scenario_vector(
     *,
-    asic: Dict,
+    asic: dict,
     network: NetworkData,
     btc_price: float,
     electricity_usd_kwh: float,
@@ -90,8 +90,8 @@ def run_scenario_vector(
     uptime_pct: float,
     btc_price_shift_pct: float = 0.0,
     difficulty_shift_pct: float = 0.0,
-    label: Optional[str] = None,
-) -> Dict:
+    label: str | None = None,
+) -> dict:
     """Apply one scenario vector to a rig and return economics + risk."""
     scenario_price = btc_price * (1 + btc_price_shift_pct / 100.0)
     scenario_diff = network.difficulty * (1 + difficulty_shift_pct / 100.0)
@@ -136,14 +136,14 @@ def run_scenario_vector(
 
 def run_scenario_set(
     *,
-    asic: Dict,
+    asic: dict,
     network: NetworkData,
     btc_price: float,
     electricity_usd_kwh: float,
     pool_fee_pct: float,
     uptime_pct: float,
-    scenarios: List[Dict],
-) -> List[Dict]:
+    scenarios: list[dict],
+) -> list[dict]:
     """Run many vectors; base electricity/uptime act as defaults per vector."""
     out = []
     for s in scenarios:

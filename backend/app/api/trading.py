@@ -4,14 +4,16 @@ portfolio and risk review. All Phase 1 (research + simulation only).
 """
 
 import uuid
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.auth import get_current_user
 from app.core.database import get_db
-from app.core.plans import require_feature, max_watchlist_for
+from app.core.plans import max_watchlist_for, require_feature
+from app.engines.backtest_engine import backtest_engine
+from app.engines.paper_trading import paper_trading_engine
+from app.engines.risk_engine import risk_engine
 from app.models.schemas import (
     AssetClass,
     BacktestRequest,
@@ -26,9 +28,6 @@ from app.models.schemas import (
     WatchlistItemCreate,
     WatchlistItemOut,
 )
-from app.engines.paper_trading import paper_trading_engine
-from app.engines.backtest_engine import backtest_engine
-from app.engines.risk_engine import risk_engine
 from app.services.market_data import market_data_service
 
 router = APIRouter(tags=["trading"])
@@ -36,7 +35,7 @@ router = APIRouter(tags=["trading"])
 
 # ---------- Watchlist ----------
 
-@router.get("/watchlist", response_model=List[WatchlistItemOut])
+@router.get("/watchlist", response_model=list[WatchlistItemOut])
 async def list_watchlist(current_user=Depends(get_current_user)):
     db = get_db()
     cursor = db.watchlist.find({"user_id": current_user["_id"]}).sort("added_at", -1)
@@ -87,7 +86,7 @@ async def add_watchlist(payload: WatchlistItemCreate, current_user=Depends(get_c
         "user_id": current_user["_id"],
         "symbol": symbol,
         "asset_class": payload.asset_class.value,
-        "added_at": datetime.now(timezone.utc),
+        "added_at": datetime.now(UTC),
     }
     await db.watchlist.insert_one(item)
 
@@ -115,7 +114,7 @@ async def remove_watchlist(item_id: str, current_user=Depends(get_current_user))
 
 # ---------- Strategies ----------
 
-@router.get("/strategies", response_model=List[StrategyOut])
+@router.get("/strategies", response_model=list[StrategyOut])
 async def list_strategies(current_user=Depends(require_feature("strategy_lab"))):
     db = get_db()
     cursor = db.strategies.find({"user_id": current_user["_id"]}).sort("created_at", -1)
@@ -140,7 +139,7 @@ async def create_strategy(payload: StrategyCreate, current_user=Depends(require_
         "max_daily_loss_pct": payload.max_daily_loss_pct,
         "market_regime_filter": payload.market_regime_filter,
         "notes": payload.notes,
-        "created_at": datetime.now(timezone.utc),
+        "created_at": datetime.now(UTC),
     }
     await db.strategies.insert_one(doc)
     return _strategy_out(doc)
@@ -184,8 +183,8 @@ async def run_backtest(payload: BacktestRequest, current_user=Depends(require_fe
 
 # ---------- Paper Trading ----------
 
-@router.get("/paper-trades", response_model=List[PaperTradeOut])
-async def list_paper_trades(status: Optional[str] = None, current_user=Depends(require_feature("paper_trading"))):
+@router.get("/paper-trades", response_model=list[PaperTradeOut])
+async def list_paper_trades(status: str | None = None, current_user=Depends(require_feature("paper_trading"))):
     return await paper_trading_engine.list_trades(current_user["_id"], status)
 
 
@@ -207,7 +206,7 @@ async def close_paper_trade(trade_id: str, current_user=Depends(require_feature(
 
 # ---------- Portfolio ----------
 
-@router.get("/portfolio", response_model=List[HoldingOut])
+@router.get("/portfolio", response_model=list[HoldingOut])
 async def list_portfolio(current_user=Depends(get_current_user)):
     db = get_db()
     cursor = db.portfolio.find({"user_id": current_user["_id"]}).sort("created_at", -1)
@@ -258,7 +257,7 @@ async def add_holding(payload: HoldingCreate, current_user=Depends(get_current_u
         "quantity": payload.quantity,
         "entry_price": payload.entry_price,
         "notes": payload.notes,
-        "created_at": datetime.now(timezone.utc),
+        "created_at": datetime.now(UTC),
     }
     await db.portfolio.insert_one(holding)
     return HoldingOut(

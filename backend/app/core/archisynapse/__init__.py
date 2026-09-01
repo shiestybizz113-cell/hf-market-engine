@@ -10,15 +10,15 @@ Public API:
     get_public_key_hex()   → str
 """
 
+from app.core.archisynapse.crypto import get_public_key_hex
 from app.core.archisynapse.registry import (
     build_receipt,
-    persist_receipt,
     get_receipt,
     list_receipts,
+    persist_receipt,
     verify_receipt,
 )
-from app.core.archisynapse.crypto import get_public_key_hex
-from app.core.archisynapse.schema import SignedReceipt, ReceiptPayload
+from app.core.archisynapse.schema import ReceiptPayload, SignedReceipt
 
 __all__ = [
     "build_receipt",

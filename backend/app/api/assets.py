@@ -12,12 +12,12 @@ creates a new fleet fact pointing at 0 value and superseding the active one.
 We evolve, we don't delete.
 """
 
-from typing import Optional
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.core import assets as A
 from app.api.auth import get_current_user
+from app.core import assets as A
 from app.core.database import get_db
 
 router = APIRouter(prefix="/assets", tags=["assets"])
@@ -25,30 +25,30 @@ router = APIRouter(prefix="/assets", tags=["assets"])
 
 class AssetCreateRequest(BaseModel):
     asset_type: str = Field(description="asic | gpu | power | storage | treasury")
-    name: Optional[str] = None
-    subject: Optional[str] = None
+    name: str | None = None
+    subject: str | None = None
     units: int = Field(ge=1, default=1)
     value_usd: float = Field(ge=0, default=0.0)
-    hashrate_ths_per_unit: Optional[float] = Field(default=None, ge=0)
-    power_kw_per_unit: Optional[float] = Field(default=None, ge=0)
-    power_mw: Optional[float] = Field(default=None, ge=0)
-    storage_mwh: Optional[float] = Field(default=None, ge=0)
-    energy_acquisition_usd_kwh: Optional[float] = Field(default=None, ge=0)
-    btc_qty: Optional[float] = Field(default=None, ge=0)
-    acquisition_date: Optional[str] = None
-    region: Optional[str] = None
-    notes: Optional[str] = None
+    hashrate_ths_per_unit: float | None = Field(default=None, ge=0)
+    power_kw_per_unit: float | None = Field(default=None, ge=0)
+    power_mw: float | None = Field(default=None, ge=0)
+    storage_mwh: float | None = Field(default=None, ge=0)
+    energy_acquisition_usd_kwh: float | None = Field(default=None, ge=0)
+    btc_qty: float | None = Field(default=None, ge=0)
+    acquisition_date: str | None = None
+    region: str | None = None
+    notes: str | None = None
 
 
 class AssetUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    value_usd: Optional[float] = Field(default=None, ge=0)
-    power_mw: Optional[float] = Field(default=None, ge=0)
-    storage_mwh: Optional[float] = Field(default=None, ge=0)
-    btc_qty: Optional[float] = Field(default=None, ge=0)
-    hashrate_ths_per_unit: Optional[float] = Field(default=None, ge=0)
-    power_kw_per_unit: Optional[float] = Field(default=None, ge=0)
-    notes: Optional[str] = None
+    name: str | None = None
+    value_usd: float | None = Field(default=None, ge=0)
+    power_mw: float | None = Field(default=None, ge=0)
+    storage_mwh: float | None = Field(default=None, ge=0)
+    btc_qty: float | None = Field(default=None, ge=0)
+    hashrate_ths_per_unit: float | None = Field(default=None, ge=0)
+    power_kw_per_unit: float | None = Field(default=None, ge=0)
+    notes: str | None = None
 
 
 class AssetImportRequest(BaseModel):

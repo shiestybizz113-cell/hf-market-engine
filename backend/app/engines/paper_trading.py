@@ -4,15 +4,15 @@ No real exchange execution in Phase 1.
 Integrated with Receipt Graph for evidence-based audit trail.
 """
 
-from datetime import datetime, timezone
-from typing import List, Optional
-from app.models.schemas import PaperTradeCreate, PaperTradeOut, AssetClass
-from app.services.market_data import market_data_service
-from app.engines.risk_engine import risk_engine
+import uuid
+from datetime import UTC, datetime
+
+from app.core import ai
 from app.core.database import get_db
 from app.engines.journal_engine import journal_engine
-from app.core import ai
-import uuid
+from app.engines.risk_engine import risk_engine
+from app.models.schemas import AssetClass, PaperTradeCreate, PaperTradeOut
+from app.services.market_data import market_data_service
 
 # Import receipt functionality
 from app.services.receipts.paper_trade_receipt_service import paper_trade_receipt_service
@@ -48,7 +48,7 @@ class PaperTradingEngine:
             "status": "open",
             "notes": payload.notes,
             "strategy_id": payload.strategy_id,
-            "opened_at": datetime.now(timezone.utc),
+            "opened_at": datetime.now(UTC),
             "closed_at": None,
             "ai_review": None,
         }
@@ -79,18 +79,18 @@ class PaperTradingEngine:
             "realized_pnl": round(pnl, 2),
             "unrealized_pnl": 0.0,
             "status": "closed",
-            "closed_at": datetime.now(timezone.utc),
+            "closed_at": datetime.now(UTC),
             "ai_review": await self._post_trade_review(user_id, trade, pnl, quote),
         }
         await db.paper_trades.update_one({"_id": trade_id}, {"$set": update})
         trade.update(update)
-        
+
         # Auto journal entry
         try:
             await journal_engine.auto_from_paper_close(user_id, trade)
         except Exception:
             pass
-        
+
         # Create and persist receipt for the closed trade
         try:
             paper_trade_out = self._to_out(trade)
@@ -102,10 +102,10 @@ class PaperTradingEngine:
         except Exception as e:
             print(f"Warning: Failed to create receipt for paper trade {trade_id}: {e}")
             # Don't fail the trade closure if receipt creation fails
-        
+
         return self._to_out(trade)
 
-    async def list_trades(self, user_id: str, status: Optional[str] = None) -> List[PaperTradeOut]:
+    async def list_trades(self, user_id: str, status: str | None = None) -> list[PaperTradeOut]:
         db = get_db()
         query = {"user_id": user_id}
         if status:

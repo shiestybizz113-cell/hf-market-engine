@@ -5,16 +5,12 @@ Phase 1 uses rule-based + template generation.
 Architecture ready for LLM injection (Grok / OpenAI).
 """
 
-from datetime import datetime, timezone
-from typing import List
-from app.models.schemas import (
-    TradeIdea, SignalDirection, SignalType, AssetClass, RiskLevel
-)
-from app.services.market_data import market_data_service
-from app.core import ai
 import random
 import uuid
 
+from app.core import ai
+from app.models.schemas import AssetClass, SignalDirection, SignalType, TradeIdea
+from app.services.market_data import market_data_service
 
 SAMPLE_THESES = {
     SignalType.MOMENTUM_BREAKOUT: [
@@ -41,7 +37,7 @@ SAMPLE_THESES = {
 
 
 class SignalEngine:
-    async def generate_sample_signals(self, limit: int = 8) -> List[TradeIdea]:
+    async def generate_sample_signals(self, limit: int = 8) -> list[TradeIdea]:
         """Generate realistic sample Trade Ideas across asset classes for Phase 1."""
         ideas = []
 

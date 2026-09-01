@@ -22,8 +22,7 @@ Three jobs:
                 drawer can reconstruct exactly which facts each lane consumed.
 """
 
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import UTC, datetime
 
 from app.core import evidence as E
 
@@ -40,12 +39,12 @@ async def capture_observation(
     state: str,
     provider: str,
     source_type: str,
-    source_reference: Optional[str] = None,
-    region: Optional[str] = None,
-    confidence: Optional[float] = None,
-    methodology: Optional[str] = None,
-    user_id: Optional[str] = None,
-    raw_snapshot_ref: Optional[str] = None,
+    source_reference: str | None = None,
+    region: str | None = None,
+    confidence: float | None = None,
+    methodology: str | None = None,
+    user_id: str | None = None,
+    raw_snapshot_ref: str | None = None,
     _db=None,
 ) -> str:
     """Persist a fresh fact (deduped against the latest fresh one).
@@ -84,13 +83,13 @@ async def resolve_metric(
     domain: str,
     metric: str,
     subject_id: str,
-    user_id: Optional[str],
-    explicit_value: Optional[float] = None,
-    explicit_unit: Optional[str] = None,
+    user_id: str | None,
+    explicit_value: float | None = None,
+    explicit_unit: str | None = None,
     explicit_provider: str = "user_input",
     explicit_source_type: str = "user_input",
     _db=None,
-) -> Dict:
+) -> dict:
     """Resolve a metric to its best fact, persisting an explicit operator
     override as a user_assumption fact when supplied.
 
@@ -119,16 +118,16 @@ async def lane_evidence(
     *,
     lane_key: str,
     label: str,
-    resolutions: Dict[str, Dict],
-) -> Dict:
+    resolutions: dict[str, dict],
+) -> dict:
     """Roll metric resolutions into a lane evidence block for the receipt.
 
     Lane quality is the weakest link across the lane's metrics: if any
     consumed metric is STALE / CONFLICTING / UNAVAILABLE the whole lane says
     so, because the lane's numbers depend on it.
     """
-    facts_used: List[str] = []
-    metrics: Dict[str, Dict] = {}
+    facts_used: list[str] = []
+    metrics: dict[str, dict] = {}
     for metric_name, res in resolutions.items():
         facts_used.append(res["fact_id"])
         metrics[metric_name] = {
@@ -174,4 +173,4 @@ async def lane_evidence(
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

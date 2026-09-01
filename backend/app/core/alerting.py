@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 
@@ -27,7 +27,7 @@ from app.core.config import settings
 log = logging.getLogger("governance.alert")
 
 # alert_type -> last sent monotonic timestamp
-_last_sent: Dict[str, float] = {}
+_last_sent: dict[str, float] = {}
 
 
 # ── Alert types ───────────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ async def fire(
     alert_type: str,
     message: str,
     *,
-    context: Optional[Dict[str, Any]] = None,
+    context: dict[str, Any] | None = None,
 ) -> None:
     """
     Record a governance alert. Always logs. Pushes to webhook if configured

@@ -54,9 +54,8 @@ LIMITS
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Optional
 
 # Model identity. Bump on ANY change to the formula or defaults, because
 # receipts signed under a given version must remain reproducible.
@@ -125,7 +124,7 @@ class ImpactParams:
     crossover_participation: float = 0.001
     max_participation: float = 0.03
     half_spread_bps: float = 0.0
-    calibration_ref: Optional[str] = None
+    calibration_ref: str | None = None
 
     def __post_init__(self) -> None:
         if self.Y <= 0:
@@ -150,19 +149,19 @@ class ImpactEstimate:
 
     # Verdict
     evidence_state: ImpactEvidenceState
-    impact_bps: Optional[float]
-    total_cost_bps: Optional[float]      # impact + half_spread
-    total_cost_notional: Optional[float]
+    impact_bps: float | None
+    total_cost_bps: float | None      # impact + half_spread
+    total_cost_notional: float | None
 
     # Inputs, echoed for reproducibility
     notional: float
-    adv: Optional[float]
-    sigma_daily: Optional[float]
+    adv: float | None
+    sigma_daily: float | None
     sigma_source: VolatilitySource
 
     # Derived
-    participation: Optional[float]
-    regime: Optional[str]                # "linear" | "sqrt"
+    participation: float | None
+    regime: str | None                # "linear" | "sqrt"
     exceeds_max_participation: bool
 
     # Model identity
@@ -170,7 +169,7 @@ class ImpactEstimate:
     params: dict
 
     # Why, when INSUFFICIENT_DATA
-    reason: Optional[str] = None
+    reason: str | None = None
 
     def as_receipt_fields(self) -> dict:
         """
@@ -196,7 +195,7 @@ class ImpactEstimate:
         }
 
 
-def parkinson_sigma(high: Optional[float], low: Optional[float]) -> Optional[float]:
+def parkinson_sigma(high: float | None, low: float | None) -> float | None:
     """
     Parkinson range-based volatility estimate for a single period.
 
@@ -255,12 +254,12 @@ def square_root_impact(
 
 def estimate_impact(
     notional: float,
-    adv: Optional[float],
+    adv: float | None,
     *,
-    sigma_daily: Optional[float] = None,
-    high_24h: Optional[float] = None,
-    low_24h: Optional[float] = None,
-    params: Optional[ImpactParams] = None,
+    sigma_daily: float | None = None,
+    high_24h: float | None = None,
+    low_24h: float | None = None,
+    params: ImpactParams | None = None,
 ) -> ImpactEstimate:
     """
     Estimate pre-trade market impact for a parent order.
@@ -370,7 +369,7 @@ def max_notional_for_impact_budget(
     max_impact_bps: float,
     adv: float,
     sigma_daily: float,
-    params: Optional[ImpactParams] = None,
+    params: ImpactParams | None = None,
 ) -> float:
     """
     Largest notional whose estimated impact stays within a bps budget,
@@ -407,7 +406,7 @@ def realized_impact_bps(
     arrival_price: float,
     avg_fill_price: float,
     side: str,
-) -> Optional[float]:
+) -> float | None:
     """
     MEASURED implementation shortfall in bps, signed so that positive means
     the fill was worse than arrival.

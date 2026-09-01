@@ -17,26 +17,31 @@ Every run persists an evidence receipt with evidence_ids and per-lane
 evidence quality summaries.
 """
 
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.core import ai, assets as A, evidence as E
-from app.core.evidence_broker import capture_observation, resolve_metric, lane_evidence
-from app.core.capital_allocation import (
-    RISK_PROFILES, SCENARIO_DEFS, run_capital_allocation, run_capital_scenarios,
-    propose_allocation,
-)
-from app.core.gpu import GPU_CATALOG
 from app.api.mining import _catalog_item, _live_context, _persist_mining_receipt
-from app.core.plans import require_feature, has_feature, try_consume_ai_review
-from app.models.schemas import (
-    CapitalRunRequest, CapitalRunResult, CapitalScenarioRequest,
-    CapitalScenarioResult, CapitalScenarioRow, CapitalOptimizeRequest,
-    CapitalOptimizeResult,
+from app.core import ai
+from app.core import assets as A
+from app.core import evidence as E
+from app.core.capital_allocation import (
+    RISK_PROFILES,
+    SCENARIO_DEFS,
+    propose_allocation,
+    run_capital_allocation,
+    run_capital_scenarios,
 )
 from app.core.database import get_db
-from app.api.auth import get_current_user
+from app.core.evidence_broker import capture_observation, lane_evidence
+from app.core.plans import has_feature, require_feature, try_consume_ai_review
+from app.models.schemas import (
+    CapitalOptimizeRequest,
+    CapitalOptimizeResult,
+    CapitalRunRequest,
+    CapitalRunResult,
+    CapitalScenarioRequest,
+    CapitalScenarioResult,
+    CapitalScenarioRow,
+)
 
 router = APIRouter(prefix="/capital", tags=["capital"])
 
@@ -48,7 +53,7 @@ _DISCLAIMER = (
 )
 
 
-def _resolve_asic(payload: CapitalRunRequest) -> Dict:
+def _resolve_asic(payload: CapitalRunRequest) -> dict:
     custom = payload.model_dump()
     try:
         return _catalog_item(payload.asic_model or "", custom)
@@ -61,17 +66,17 @@ def _resolve_asic(payload: CapitalRunRequest) -> Dict:
 
 async def _capture_run_facts(
     payload: CapitalRunRequest,
-    network, btc_price: float, prov: Dict, simulation: bool,
+    network, btc_price: float, prov: dict, simulation: bool,
     user_id: str,
-) -> tuple[list, Dict[str, Dict]]:
+) -> tuple[list, dict[str, dict]]:
     """Capture all run inputs as evidence facts and return (evidence_ids, resolutions).
 
     Returns (all_evidence_ids, metric_resolutions) where resolutions maps
     metric_name -> E.summarize_resolution() shape for per-lane evidence.
     """
     db = get_db()
-    all_ids: List[str] = []
-    resolutions: Dict[str, Dict] = {}
+    all_ids: list[str] = []
+    resolutions: dict[str, dict] = {}
 
     # 1. Live BTC price fact
     btc_eid = await capture_observation(
@@ -153,8 +158,8 @@ async def _capture_run_facts(
 
 
 async def _build_lane_evidence_from_resolutions(
-    resolutions: Dict[str, Dict],
-) -> Dict[str, Dict]:
+    resolutions: dict[str, dict],
+) -> dict[str, dict]:
     """Build per-lane evidence summaries from metric resolutions."""
     btc_metrics = {}
     if "btc_price" in resolutions:
@@ -192,8 +197,8 @@ async def _build_lane_evidence_from_resolutions(
 
 
 async def _persist_capital_receipt(
-    *, user_id: str, analysis_type: str, simulation: bool, result: Dict,
-    evidence_ids: Optional[list] = None, lanes_evidence: Optional[Dict] = None,
+    *, user_id: str, analysis_type: str, simulation: bool, result: dict,
+    evidence_ids: list | None = None, lanes_evidence: dict | None = None,
 ) -> str:
     flat = {
         "capital_usd": result["inputs"]["capital_usd"],
@@ -362,7 +367,7 @@ async def capital_scenarios(
     )
 
     keys = payload.vectors or list(SCENARIO_DEFS.keys())
-    vectors: List[Dict] = []
+    vectors: list[dict] = []
     for key in keys:
         vec = SCENARIO_DEFS.get(key)
         if not vec:
@@ -459,7 +464,7 @@ async def capital_optimize(
 
     lanes_evidence_data = await _build_lane_evidence_from_resolutions(resolutions)
 
-    proposals: Dict[str, Dict] = {}
+    proposals: dict[str, dict] = {}
     for profile in profiles:
         base["recommendation"] = propose_allocation(
             capital_usd=payload.capital_usd,

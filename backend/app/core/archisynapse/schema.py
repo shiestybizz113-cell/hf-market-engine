@@ -11,7 +11,8 @@ Schema is forward-compatible with Archisynapse v2 (payment microservices).
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -22,17 +23,17 @@ class ReceiptPayload(BaseModel):
     """
     receipt_id: str = Field(..., description="UUID v4 — globally unique")
     job: str = Field(..., description="AI job type e.g. asset_thesis, journal_review")
-    user_id: Optional[str] = Field(None, description="Authenticated user; None for system jobs")
+    user_id: str | None = Field(None, description="Authenticated user; None for system jobs")
     model: str
     provider: str
     fallback_used: bool
     simulation: bool = False
-    tokens_estimate: Dict[str, int] = Field(default_factory=dict)
+    tokens_estimate: dict[str, int] = Field(default_factory=dict)
     estimated_cost_usd: float
     generated_at: float = Field(default_factory=time.time)
     input_hash: str = Field(..., description="SHA-256 of canonical(system_prompt + user_prompt)")
     output_hash: str = Field(..., description="SHA-256 of output text")
-    extra: Optional[Dict[str, Any]] = None
+    extra: dict[str, Any] | None = None
 
 
 class SignedReceipt(BaseModel):
@@ -48,9 +49,9 @@ class SignedReceipt(BaseModel):
     signature: str = Field(..., description="Hex Ed25519 signature")
     public_key: str = Field(..., description="Hex Ed25519 public key")
     receipt_persisted: bool = True
-    trust: Dict[str, Any] = Field(default_factory=dict)
+    trust: dict[str, Any] = Field(default_factory=dict)
 
-    def to_db_doc(self) -> Dict[str, Any]:
+    def to_db_doc(self) -> dict[str, Any]:
         """Flatten to MongoDB document. _id = receipt_id."""
         doc = self.payload.model_dump()
         doc["_id"] = doc.pop("receipt_id")
@@ -62,7 +63,7 @@ class SignedReceipt(BaseModel):
         return doc
 
     @classmethod
-    def from_db_doc(cls, doc: Dict[str, Any]) -> "SignedReceipt":
+    def from_db_doc(cls, doc: dict[str, Any]) -> SignedReceipt:
         """Reconstruct from MongoDB document."""
         d = dict(doc)
         receipt_id = d.pop("_id")

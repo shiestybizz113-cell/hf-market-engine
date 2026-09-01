@@ -1,12 +1,14 @@
-from fastapi import APIRouter, Depends
-from datetime import datetime, timezone
-from app.models.schemas import SystemHealth, PlanInfo
-from app.core.database import get_db
-from app.core.config import settings
-from app.core.plans import catalog_public
-from app.core import ai, budget
-from app.api.auth import get_current_user
+from datetime import UTC, datetime
+
 import httpx
+from fastapi import APIRouter, Depends
+
+from app.api.auth import get_current_user
+from app.core import ai, budget
+from app.core.config import settings
+from app.core.database import get_db
+from app.core.plans import catalog_public
+from app.models.schemas import PlanInfo, SystemHealth
 
 router = APIRouter(tags=["system"])
 
@@ -50,7 +52,7 @@ async def health():
         ai_model=ai_info["model"],
         market_data_mode=settings.MARKET_DATA_MODE,
         auth="ok",
-        last_market_refresh=datetime.now(timezone.utc),
+        last_market_refresh=datetime.now(UTC),
         active_users=active_users,
         saved_strategies=strategies,
         paper_trades=paper,

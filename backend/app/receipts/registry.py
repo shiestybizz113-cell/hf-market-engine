@@ -9,7 +9,6 @@ compromise handling) is the part worth keeping stable across that swap.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
@@ -52,7 +51,7 @@ class TrustOverlay:
     """
 
     status: VerificationStatus
-    quarantine_reason: Optional[str] = None
+    quarantine_reason: str | None = None
 
 
 @dataclass
@@ -216,7 +215,7 @@ def build_training_extract(
     signing_key: SigningKey,
     source_receipt: Receipt,
     feature_payload: dict,
-    source_scheduled_purge_date: Optional[str] = None,
+    source_scheduled_purge_date: str | None = None,
 ) -> Receipt:
     """De-identified feature extraction, proven to have happened BEFORE
     the source receipt's purge — this is what makes

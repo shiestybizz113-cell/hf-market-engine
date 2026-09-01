@@ -14,14 +14,14 @@ The capital engine uses the best-eligible power_price fact for the energy lane
 acquisition cost when the operator has not supplied an explicit override.
 """
 
-from typing import Optional
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.core import evidence as E
-from app.core.evidence_broker import capture_observation
 from app.api.auth import get_current_user
+from app.core import evidence as E
 from app.core.database import get_db
+from app.core.evidence_broker import capture_observation
 
 router = APIRouter(prefix="/energy", tags=["energy"])
 
@@ -32,12 +32,12 @@ class EnergyPriceRequest(BaseModel):
     price_usd_kwh: float = Field(gt=0)
     price_type: str = Field(default="user_assumption")
     provider: str = Field(default="user_input")
-    region: Optional[str] = None
-    source_reference: Optional[str] = None
-    demand_charge_usd_kw_month: Optional[float] = Field(default=None, ge=0)
-    min_consumption_kwh_day: Optional[float] = Field(default=None, ge=0)
-    time_of_use: Optional[str] = Field(default=None, description="peak | off_peak | flat")
-    observed_at: Optional[str] = None
+    region: str | None = None
+    source_reference: str | None = None
+    demand_charge_usd_kw_month: float | None = Field(default=None, ge=0)
+    min_consumption_kwh_day: float | None = Field(default=None, ge=0)
+    time_of_use: str | None = Field(default=None, description="peak | off_peak | flat")
+    observed_at: str | None = None
 
 
 @router.post("/prices")

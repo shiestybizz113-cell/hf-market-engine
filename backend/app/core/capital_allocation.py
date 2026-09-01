@@ -31,12 +31,14 @@ only operating profit, simple payback and assumption-labeled horizon values.
 The optimizer PROPOSES a split. It does not trade, spend or deploy anything.
 """
 
-from typing import Dict, List, Optional
 
+from app.core.gpu import gpu_economics, resolve_gpu
 from app.core.mining import (
-    NetworkData, compute_estimate, mine_vs_buy, network_data_dict,
+    NetworkData,
+    compute_estimate,
+    mine_vs_buy,
+    network_data_dict,
 )
-from app.core.gpu import resolve_gpu, gpu_economics
 
 DAYS_PER_MONTH = 30.0
 KW_PER_MW = 1000.0
@@ -63,9 +65,9 @@ RANKING_BASIS = (
 # --------------------------------------------------------------------------- #
 # Lanes
 # --------------------------------------------------------------------------- #
-def _empty_lane(key: str, label: str, *, available: bool, reason: Optional[str],
-                capital: float, evidence_state: str, evidence: Dict,
-                risk_flags: Optional[List[str]] = None) -> Dict:
+def _empty_lane(key: str, label: str, *, available: bool, reason: str | None,
+                capital: float, evidence_state: str, evidence: dict,
+                risk_flags: list[str] | None = None) -> dict:
     return {
         "key": key,
         "label": label,
@@ -95,7 +97,7 @@ def _empty_lane(key: str, label: str, *, available: bool, reason: Optional[str],
 
 def btc_lane(*, capital_usd: float, btc_price: float,
              btc_price_at_horizon: float, evidence_state: str,
-             provider: str, owned_btc: float = 0.0) -> Dict:
+             provider: str, owned_btc: float = 0.0) -> dict:
     """Financial capital: spot BTC treasury.
 
     ``owned_btc`` (from the customer's fleet) is reported as an owned baseline
@@ -158,7 +160,7 @@ def btc_lane(*, capital_usd: float, btc_price: float,
     return lane
 
 
-def mining_lane(*, capital_usd: float, available_mw: float, asic: Dict,
+def mining_lane(*, capital_usd: float, available_mw: float, asic: dict,
                 network: NetworkData, btc_price: float,
                 electricity_usd_kwh: float, pool_fee_pct: float,
                 uptime_pct: float, horizon_months: int,
@@ -167,7 +169,7 @@ def mining_lane(*, capital_usd: float, available_mw: float, asic: Dict,
                 setup_cost_usd_per_unit: float = 0.0,
                 hosting_cost_usd_per_unit_month: float = 0.0,
                 maintenance_cost_usd_per_unit_month: float = 0.0,
-                hardware_resale_value_usd_per_unit: float = 0.0) -> Dict:
+                hardware_resale_value_usd_per_unit: float = 0.0) -> dict:
     """Compute infrastructure: mine within capital AND power constraints."""
     units_by_capital = (
         int(capital_usd // asic["price_usd"]) if asic["price_usd"] > 0 else 0
@@ -281,12 +283,12 @@ def mining_lane(*, capital_usd: float, available_mw: float, asic: Dict,
 
 def gpu_lane(*, capital_usd: float, available_mw: float,
              electricity_usd_kwh: float, gpu_model: str,
-             gpu_capex_usd: Optional[float], gpu_power_kw: Optional[float],
-             gpu_cloud_rental_usd_per_hr: Optional[float],
-             gpu_rental_usd_per_hr: Optional[float],
+             gpu_capex_usd: float | None, gpu_power_kw: float | None,
+             gpu_cloud_rental_usd_per_hr: float | None,
+             gpu_rental_usd_per_hr: float | None,
              gpu_utilization_pct: float, gpu_uptime_pct: float,
              gpu_units_cap: int, gpu_pue: float, horizon_months: int,
-             evidence_state: str) -> Dict:
+             evidence_state: str) -> dict:
     """Compute infrastructure: build GPUs within capital AND power."""
     gpu = resolve_gpu(
         gpu_model or None, gpu_capex_usd, gpu_power_kw, gpu_cloud_rental_usd_per_hr,
@@ -395,12 +397,12 @@ def gpu_lane(*, capital_usd: float, available_mw: float,
 
 
 def energy_lane(*, available_mw: float, electricity_usd_kwh: float,
-                energy_acquisition_usd_kwh: Optional[float],
-                energy_sell_price_usd_kwh: Optional[float],
+                energy_acquisition_usd_kwh: float | None,
+                energy_sell_price_usd_kwh: float | None,
                 energy_utilization_pct: float,
                 storage_mwh: float, storage_capex_usd_per_mwh: float,
                 storage_roundtrip_pct: float, horizon_months: int,
-                evidence_state: str) -> Dict:
+                evidence_state: str) -> dict:
     """Energy infrastructure: acquire power, sell at avoided-cost/PPA price.
 
     All energy inputs are operator assumptions (no live energy provider is
@@ -509,33 +511,33 @@ def run_capital_allocation(
     horizon_months: int,
     electricity_usd_kwh: float,
     risk_profile: str,
-    network: Optional[NetworkData],
+    network: NetworkData | None,
     btc_price: float,
     btc_price_provider: str,
     simulation: bool,
-    asic: Dict,
+    asic: dict,
     pool_fee_pct: float,
     uptime_pct: float,
-    btc_price_at_horizon: Optional[float],
+    btc_price_at_horizon: float | None,
     difficulty_growth_pct_year: float,
     gpu_model: str,
-    gpu_capex_usd: Optional[float],
-    gpu_power_kw: Optional[float],
-    gpu_cloud_rental_usd_per_hr: Optional[float],
-    gpu_rental_usd_per_hr: Optional[float],
+    gpu_capex_usd: float | None,
+    gpu_power_kw: float | None,
+    gpu_cloud_rental_usd_per_hr: float | None,
+    gpu_rental_usd_per_hr: float | None,
     gpu_utilization_pct: float,
     gpu_uptime_pct: float,
     gpu_units_cap: int,
     gpu_pue: float,
-    energy_acquisition_usd_kwh: Optional[float],
-    energy_sell_price_usd_kwh: Optional[float],
+    energy_acquisition_usd_kwh: float | None,
+    energy_sell_price_usd_kwh: float | None,
     energy_utilization_pct: float,
     storage_mwh: float,
     storage_capex_usd_per_mwh: float,
     storage_roundtrip_pct: float,
     cash_interest_rate_pct_year: float,
-    owned: Optional[Dict] = None,
-) -> Dict:
+    owned: dict | None = None,
+) -> dict:
     """Evaluate one canonical scenario across all four lanes.
 
     ``simulation`` forces evidence_state=SIMULATION on every lane; otherwise
@@ -583,7 +585,7 @@ def run_capital_allocation(
         horizon_months=horizon_months,
     )
 
-    lanes: Dict[str, Dict] = {
+    lanes: dict[str, dict] = {
         "btc": btc_lane(
             capital_usd=capital_usd, btc_price=btc_price,
             btc_price_at_horizon=horizon_price,
@@ -701,15 +703,15 @@ def run_capital_allocation(
 
 def _owned_fleet_baseline(
     *,
-    owned_mining: Dict,
-    network: Optional[NetworkData],
+    owned_mining: dict,
+    network: NetworkData | None,
     btc_price: float,
     btc_price_at_horizon: float,
     electricity_usd_kwh: float,
     pool_fee_pct: float,
     uptime_pct: float,
     horizon_months: int,
-) -> Optional[Dict]:
+) -> dict | None:
     """Value the customer's existing mining fleet on the same economic frame.
 
     Uses aggregate fleet numbers (hashrate_ths, power_kw) converted to a
@@ -755,7 +757,7 @@ def _owned_fleet_baseline(
     }
 
 
-def _rank_lanes(lanes: Dict[str, Dict]) -> List[str]:
+def _rank_lanes(lanes: dict[str, dict]) -> list[str]:
     """Available operating lanes by profit_per_mw; BTC ranked separately."""
     def sort_key(item):
         key, lane = item
@@ -773,7 +775,7 @@ def _rank_lanes(lanes: Dict[str, Dict]) -> List[str]:
 # --------------------------------------------------------------------------- #
 # Scenarios
 # --------------------------------------------------------------------------- #
-SCENARIO_DEFS: Dict[str, Dict] = {
+SCENARIO_DEFS: dict[str, dict] = {
     "base": {
         "label": "Base",
         "btc_price_shift_pct": 0.0,
@@ -860,9 +862,9 @@ SCENARIO_DEFS: Dict[str, Dict] = {
 
 def run_capital_scenarios(
     *,
-    base: Dict,
-    vectors: List[Dict],
-) -> List[Dict]:
+    base: dict,
+    vectors: list[dict],
+) -> list[dict]:
     """Re-run the canonical engine under each scenario vector.
 
     ``base`` is the output of run_capital_allocation (its inputs are cloned and
@@ -871,7 +873,7 @@ def run_capital_scenarios(
     """
     base_inputs = base["inputs"]
     base_observed = base["observed"]
-    out: List[Dict] = []
+    out: list[dict] = []
     for vec in vectors:
         label = vec["label"]
         btc_shift = vec.get("btc_price_shift_pct", 0.0)
@@ -963,7 +965,7 @@ def run_capital_scenarios(
     return out
 
 
-def _shift_network(net: Optional[Dict], difficulty: float) -> Optional[NetworkData]:
+def _shift_network(net: dict | None, difficulty: float) -> NetworkData | None:
     if net is None:
         return None
     return NetworkData(
@@ -980,9 +982,9 @@ def _shift_network(net: Optional[Dict], difficulty: float) -> Optional[NetworkDa
 # --------------------------------------------------------------------------- #
 # Optimizer (proposes only — never executes)
 # --------------------------------------------------------------------------- #
-def propose_allocation(*, capital_usd: float, lanes: Dict[str, Dict],
+def propose_allocation(*, capital_usd: float, lanes: dict[str, dict],
                        risk_profile: str,
-                       evidence: Optional[Dict] = None) -> Dict:
+                       evidence: dict | None = None) -> dict:
     """Heuristic proposal of a capital split across the four buckets.
 
     PROPOSAL ONLY. Returns pct + per-lane USD. Does not trade, spend or deploy.
@@ -1000,7 +1002,7 @@ def propose_allocation(*, capital_usd: float, lanes: Dict[str, Dict],
     # Score available operating lanes by profit_per_mw (absolute monthly flow
     # for zero-MW lanes). Treasury gets its floor; reserve gets its floor; the
     # remainder is split across operating lanes proportional to score.
-    scores: Dict[str, float] = {}
+    scores: dict[str, float] = {}
     for key in ("gpu", "mining", "energy"):
         lane = lanes.get(key)
         if lane and lane.get("available"):
@@ -1067,7 +1069,7 @@ def propose_allocation(*, capital_usd: float, lanes: Dict[str, Dict],
     }
 
 
-def _evidence_quality_block(evidence: Optional[Dict]) -> Dict:
+def _evidence_quality_block(evidence: dict | None) -> dict:
     """Evidence-quality label attached to a proposal.
 
     A proposal is ASSUMPTION_HEAVY when any recommended operating lane rests on

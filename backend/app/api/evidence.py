@@ -18,23 +18,23 @@ Endpoints:
   POST /evidence/verify            — offline verify a receipt payload
 """
 
-from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from app.core.database import get_db
+
 from app.api.auth import get_current_user
+from app.core import evidence as E
 from app.core.archisynapse import (
+    get_public_key_hex,
     get_receipt,
     list_receipts,
     verify_receipt,
-    get_public_key_hex,
-    SignedReceipt,
 )
 from app.core.archisynapse.crypto import verify
-from app.core import evidence as E
-from app.core.evidence_broker import capture_observation, now_iso
-from app.core.mining import ASIC_CATALOG
+from app.core.database import get_db
+from app.core.evidence_broker import capture_observation
 from app.core.gpu import GPU_CATALOG
+from app.core.mining import ASIC_CATALOG
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
 
@@ -43,7 +43,7 @@ router = APIRouter(prefix="/evidence", tags=["evidence"])
 async def list_user_receipts(
     limit: int = 20,
     skip: int = 0,
-    job: Optional[str] = None,
+    job: str | None = None,
     current_user=Depends(get_current_user),
 ):
     """
@@ -140,9 +140,9 @@ async def verify_receipt_payload(body: VerifyRequest):
 
 @router.get("/facts")
 async def list_facts(
-    domain: Optional[str] = None,
-    metric: Optional[str] = None,
-    subject_id: Optional[str] = None,
+    domain: str | None = None,
+    metric: str | None = None,
+    subject_id: str | None = None,
     limit: int = 50,
     current_user=Depends(get_current_user),
 ):

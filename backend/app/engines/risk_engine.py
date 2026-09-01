@@ -4,10 +4,7 @@ Risk Engine
 Every signal, strategy and paper trade should pass through risk checks.
 """
 
-from typing import List, Optional
-from app.models.schemas import (
-    RiskReview, RiskLevel, TradeIdea, PaperTradeCreate, StrategyCreate
-)
+from app.models.schemas import PaperTradeCreate, RiskLevel, RiskReview, StrategyCreate, TradeIdea
 
 
 class RiskEngine:

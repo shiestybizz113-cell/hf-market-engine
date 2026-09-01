@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from app.core.archisynapse.crypto import (
     canonical_json,
@@ -50,8 +50,8 @@ def build_receipt(
     provider_name: str,
     fallback_used: bool,
     simulation: bool = False,
-    user_id: Optional[str] = None,
-    extra: Optional[Dict[str, Any]] = None,
+    user_id: str | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> SignedReceipt:
     """
     Build and cryptographically sign a receipt.
@@ -96,7 +96,7 @@ def build_receipt(
 async def persist_receipt(
     receipt: SignedReceipt,
     db,
-) -> Tuple[str, bool]:
+) -> tuple[str, bool]:
     """
     Write the signed receipt to MongoDB.
     Returns (receipt_id, persisted: bool).
@@ -122,7 +122,7 @@ async def get_receipt(
     receipt_id: str,
     user_id: str,
     db,
-) -> Optional[SignedReceipt]:
+) -> SignedReceipt | None:
     """Fetch and verify a single receipt. Returns None if missing or invalid."""
     doc = await db[COLLECTION].find_one(
         {"_id": receipt_id, "user_id": user_id}
@@ -141,15 +141,15 @@ async def list_receipts(
     user_id: str,
     db,
     *,
-    job: Optional[str] = None,
+    job: str | None = None,
     limit: int = 20,
     skip: int = 0,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     List user receipts, reverse-chronological, with signature verified inline.
     Corrupted/tampered receipts are included but flagged signature_valid=False.
     """
-    query: Dict[str, Any] = {"user_id": user_id}
+    query: dict[str, Any] = {"user_id": user_id}
     if job:
         query["job"] = job
 

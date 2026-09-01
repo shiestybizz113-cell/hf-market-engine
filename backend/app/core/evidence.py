@@ -44,8 +44,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple
+from datetime import UTC, datetime, timedelta
 
 from app.core.database import get_db
 
@@ -72,7 +71,7 @@ CONFLICT_RELATIVE_PCT = 10.0
 # --------------------------------------------------------------------------- #
 FRESHNESS_DEFAULT_SECONDS = 86400  # 1 day fallback
 
-FRESHNESS_POLICY: Dict[Tuple[str, str], int] = {
+FRESHNESS_POLICY: dict[tuple[str, str], int] = {
     # Live market observations expire fast.
     ("market", "btc_price"): 120,
     # Network data changes on ~10-minute retargets; 15 min is honest.
@@ -96,7 +95,7 @@ FRESHNESS_POLICY: Dict[Tuple[str, str], int] = {
 
 # Source-type overrides: an energy *wholesale* price expires fast, a *contract*
 # price is good for a month, a *tariff* for a week. Same for hardware quotes.
-FRESHNESS_SOURCE_TYPE: Dict[str, int] = {
+FRESHNESS_SOURCE_TYPE: dict[str, int] = {
     "live_api": 300,
     "wholesale": 300,
     "tariff": 7 * 86400,
@@ -111,7 +110,7 @@ FRESHNESS_SOURCE_TYPE: Dict[str, int] = {
 }
 
 # Source quality (0..1) — used to break ties after state + freshness.
-SOURCE_QUALITY: Dict[str, float] = {
+SOURCE_QUALITY: dict[str, float] = {
     "coingecko": 0.9,
     "blockchain.info": 0.9,
     "user_purchase": 0.85,
@@ -146,20 +145,20 @@ class EvidenceFact:
     state: str
     provider: str
     source_type: str
-    source_reference: Optional[str] = None
-    observed_at: Optional[datetime] = None
-    region: Optional[str] = None
-    confidence: Optional[float] = None
-    methodology: Optional[str] = None
-    user_id: Optional[str] = None
-    raw_snapshot_ref: Optional[str] = None
-    supersedes: Optional[str] = None
+    source_reference: str | None = None
+    observed_at: datetime | None = None
+    region: str | None = None
+    confidence: float | None = None
+    methodology: str | None = None
+    user_id: str | None = None
+    raw_snapshot_ref: str | None = None
+    supersedes: str | None = None
     evidence_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    ingested_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    valid_until: Optional[datetime] = None
-    freshness_seconds: Optional[int] = None
-    sha256: Optional[str] = None
-    extra: Dict = field(default_factory=dict)
+    ingested_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    valid_until: datetime | None = None
+    freshness_seconds: int | None = None
+    sha256: str | None = None
+    extra: dict = field(default_factory=dict)
 
 
 def freshness_seconds_for(domain: str, metric: str, source_type: str = "") -> int:
@@ -172,7 +171,7 @@ def source_quality_for(provider: str) -> float:
     return SOURCE_QUALITY.get(provider, 0.3)
 
 
-def _canonical(f: EvidenceFact) -> Dict:
+def _canonical(f: EvidenceFact) -> dict:
     """Stable, non-identity payload used for the sha256 digest."""
     return {
         "domain": f.domain,
@@ -194,7 +193,7 @@ def fact_sha256(f: EvidenceFact) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def to_doc(f: EvidenceFact) -> Dict:
+def to_doc(f: EvidenceFact) -> dict:
     """Mongo-ready document. Immutable: nothing is ever $set back into it."""
     obs = f.observed_at or f.ingested_at
     ttl = freshness_seconds_for(f.domain, f.metric, f.source_type)
@@ -237,15 +236,15 @@ async def ingest_fact(
     state: str,
     provider: str,
     source_type: str,
-    source_reference: Optional[str] = None,
-    observed_at: Optional[datetime] = None,
-    region: Optional[str] = None,
-    confidence: Optional[float] = None,
-    methodology: Optional[str] = None,
-    user_id: Optional[str] = None,
-    raw_snapshot_ref: Optional[str] = None,
-    supersedes: Optional[str] = None,
-    extra: Optional[Dict] = None,
+    source_reference: str | None = None,
+    observed_at: datetime | None = None,
+    region: str | None = None,
+    confidence: float | None = None,
+    methodology: str | None = None,
+    user_id: str | None = None,
+    raw_snapshot_ref: str | None = None,
+    supersedes: str | None = None,
+    extra: dict | None = None,
     _db=None,
 ) -> str:
     """Append one immutable fact. Returns its evidence_id.
@@ -278,23 +277,23 @@ async def ingest_fact(
     return f.evidence_id
 
 
-def is_stale(doc: Dict, now: Optional[datetime] = None) -> bool:
-    now = now or datetime.now(timezone.utc)
+def is_stale(doc: dict, now: datetime | None = None) -> bool:
+    now = now or datetime.now(UTC)
     valid_until = doc.get("valid_until")
     if not valid_until:
         return True
     if valid_until.tzinfo is None:
-        valid_until = valid_until.replace(tzinfo=timezone.utc)
+        valid_until = valid_until.replace(tzinfo=UTC)
     return now > valid_until
 
 
-def age_seconds(doc: Dict, now: Optional[datetime] = None) -> float:
-    now = now or datetime.now(timezone.utc)
+def age_seconds(doc: dict, now: datetime | None = None) -> float:
+    now = now or datetime.now(UTC)
     obs = doc.get("observed_at") or doc.get("ingested_at")
     if obs is None:
         return float("inf")
     if obs.tzinfo is None:
-        obs = obs.replace(tzinfo=timezone.utc)
+        obs = obs.replace(tzinfo=UTC)
     return max(0.0, (now - obs).total_seconds())
 
 
@@ -302,15 +301,15 @@ async def facts_for(
     *,
     domain: str,
     metric: str,
-    subject_id: Optional[str] = None,
-    user_id: Optional[str] = None,
+    subject_id: str | None = None,
+    user_id: str | None = None,
     include_stale: bool = True,
     limit: int = 50,
     _db=None,
-) -> List[Dict]:
+) -> list[dict]:
     """All facts for a metric (append-only history preserved)."""
     db = _db or get_db()
-    query: Dict = {"domain": domain, "metric": metric}
+    query: dict = {"domain": domain, "metric": metric}
     if subject_id:
         query["subject_id"] = subject_id
     scope = [None]
@@ -333,20 +332,20 @@ async def eligible_facts(
     *,
     domain: str,
     metric: str,
-    subject_id: Optional[str] = None,
-    user_id: Optional[str] = None,
+    subject_id: str | None = None,
+    user_id: str | None = None,
     _db=None,
-) -> List[Dict]:
+) -> list[dict]:
     """Facts that are fresh (not expired) and belong to the caller."""
     facts = await facts_for(
         domain=domain, metric=metric, subject_id=subject_id,
         user_id=user_id, include_stale=True, _db=_db,
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return [f for f in facts if not is_stale(f, now)]
 
 
-def _material_disagreement(a: Dict, b: Dict) -> bool:
+def _material_disagreement(a: dict, b: dict) -> bool:
     va, vb = float(a["value"]), float(b["value"])
     denom = max(abs(va), abs(vb))
     if denom <= 1e-9:
@@ -354,7 +353,7 @@ def _material_disagreement(a: Dict, b: Dict) -> bool:
     return abs(va - vb) / denom * 100.0 > CONFLICT_RELATIVE_PCT
 
 
-def conflicts_in(facts: List[Dict]) -> List[Dict]:
+def conflicts_in(facts: list[dict]) -> list[dict]:
     """Pairs of eligible facts for the same metric that disagree materially.
 
     Both sides are surfaced — losing sources are never hidden.
@@ -376,7 +375,7 @@ def conflicts_in(facts: List[Dict]) -> List[Dict]:
     return out
 
 
-def select_best_fact(facts: List[Dict], explicit_user_input: bool = False) -> Optional[Dict]:
+def select_best_fact(facts: list[dict], explicit_user_input: bool = False) -> dict | None:
     """Rank by evidence state -> freshness -> source quality. All candidates are
     preserved in the caller's trace; this only picks the winner."""
     if not facts:
@@ -394,7 +393,7 @@ def select_best_fact(facts: List[Dict], explicit_user_input: bool = False) -> Op
     return max(facts, key=rank)
 
 
-def quality_for_facts(facts: List[Dict]) -> Tuple[str, int]:
+def quality_for_facts(facts: list[dict]) -> tuple[str, int]:
     """Data-quality label + 0..100 score for a resolution.
 
     COMPLETE       a fresh fact was used, no conflicts
@@ -419,9 +418,9 @@ def quality_for_facts(facts: List[Dict]) -> Tuple[str, int]:
 
 
 def summarize_resolution(
-    facts: List[Dict],
+    facts: list[dict],
     explicit_user_input: bool = False,
-) -> Dict:
+) -> dict:
     """Public shape for one resolved metric: value + winner + full trace."""
     conflicts = conflicts_in(facts)
     best = select_best_fact(facts, explicit_user_input)
@@ -459,7 +458,7 @@ def summarize_resolution(
     }
 
 
-async def get_fact(evidence_id: str, _db=None) -> Optional[Dict]:
+async def get_fact(evidence_id: str, _db=None) -> dict | None:
     db = _db or get_db()
     doc = await db.evidence_facts.find_one({"evidence_id": evidence_id})
     if doc:
@@ -470,7 +469,7 @@ async def get_fact(evidence_id: str, _db=None) -> Optional[Dict]:
 # --------------------------------------------------------------------------- #
 # Proof graph
 # --------------------------------------------------------------------------- #
-async def build_proof_graph(receipt_id: str, user_id: str, _db=None) -> Dict:
+async def build_proof_graph(receipt_id: str, user_id: str, _db=None) -> dict:
     """Reconstruct receipt -> evidence facts -> sources for the proof drawer.
 
     Works for any receipt in ``mining_receipts`` (mining and capital receipts
@@ -489,7 +488,7 @@ async def build_proof_graph(receipt_id: str, user_id: str, _db=None) -> Dict:
     receipt.pop("_id", None)
 
     ids = list(dict.fromkeys(receipt.get("evidence_ids") or []))
-    facts: List[Dict] = []
+    facts: list[dict] = []
     for fid in ids:
         fact = await get_fact(fid, db)
         if fact:

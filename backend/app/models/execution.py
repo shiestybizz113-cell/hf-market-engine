@@ -5,10 +5,12 @@ Phase 1: educational + paper simulation only.
 Phase 2: live venue routing under explicit approval + risk gates.
 """
 
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime
 from enum import Enum
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+
 from app.models.schemas import AssetClass
 
 
@@ -58,35 +60,35 @@ class ExecutionAlgoConfig(BaseModel):
     urgency: ExecutionUrgency = ExecutionUrgency.MEDIUM
 
     # Time / schedule
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
-    duration_minutes: Optional[int] = Field(None, ge=1, le=1440)
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    duration_minutes: int | None = Field(None, ge=1, le=1440)
 
     # Participation
-    target_participation_rate: Optional[float] = Field(None, ge=0.01, le=0.40)  # e.g. 0.10 = 10%
-    max_participation_rate: Optional[float] = Field(0.20, ge=0.01, le=0.50)
+    target_participation_rate: float | None = Field(None, ge=0.01, le=0.40)  # e.g. 0.10 = 10%
+    max_participation_rate: float | None = Field(0.20, ge=0.01, le=0.50)
 
     # Slicing
     slice_interval_seconds: int = Field(30, ge=5, le=600)
     randomize_slices: bool = True          # anti-gaming
-    min_slice_notional: Optional[float] = None
-    max_slice_notional: Optional[float] = None
+    min_slice_notional: float | None = None
+    max_slice_notional: float | None = None
 
     # Iceberg
-    display_qty: Optional[float] = None    # visible tip
-    display_qty_pct: Optional[float] = Field(None, ge=0.01, le=0.50)
+    display_qty: float | None = None    # visible tip
+    display_qty_pct: float | None = Field(None, ge=0.01, le=0.50)
 
     # Limits & safeguards
-    limit_price: Optional[float] = None
-    max_slippage_bps: Optional[float] = Field(50, ge=1, le=500)
-    would_price: Optional[float] = None    # do-not-cross beyond this
+    limit_price: float | None = None
+    max_slippage_bps: float | None = Field(50, ge=1, le=500)
+    would_price: float | None = None    # do-not-cross beyond this
     allow_dark: bool = True
     allow_dex: bool = False
-    preferred_venues: List[str] = []
-    excluded_venues: List[str] = []
+    preferred_venues: list[str] = []
+    excluded_venues: list[str] = []
 
     # Adaptive / IS
-    alpha_signal: Optional[float] = None   # short-term view (-1 to +1)
+    alpha_signal: float | None = None   # short-term view (-1 to +1)
     risk_aversion: float = Field(0.5, ge=0.0, le=1.0)
 
 
@@ -97,16 +99,16 @@ class ParentOrderCreate(BaseModel):
     side: Literal["buy", "sell"]
     quantity: float = Field(..., gt=0)
     order_type: Literal["limit", "market"] = "limit"
-    limit_price: Optional[float] = None
+    limit_price: float | None = None
 
     # Algo choice
     algo: ExecutionAlgoConfig = Field(default_factory=ExecutionAlgoConfig)
 
     # Risk / compliance context (filled by Risk Engine)
-    strategy_id: Optional[str] = None
+    strategy_id: str | None = None
     paper_mode: bool = True                # Phase 1 always True
-    client_order_id: Optional[str] = None
-    notes: Optional[str] = None
+    client_order_id: str | None = None
+    notes: str | None = None
 
 
 class ChildOrder(BaseModel):
@@ -118,13 +120,13 @@ class ChildOrder(BaseModel):
     side: str
     quantity: float
     filled_qty: float = 0.0
-    avg_price: Optional[float] = None
-    limit_price: Optional[float] = None
+    avg_price: float | None = None
+    limit_price: float | None = None
     status: ExecutionStatus
-    submitted_at: Optional[datetime] = None
-    filled_at: Optional[datetime] = None
+    submitted_at: datetime | None = None
+    filled_at: datetime | None = None
     fees: float = 0.0
-    raw_response: Optional[Dict[str, Any]] = None
+    raw_response: dict[str, Any] | None = None
 
 
 class ParentOrder(BaseModel):
@@ -137,22 +139,22 @@ class ParentOrder(BaseModel):
     quantity: float
     filled_qty: float = 0.0
     remaining_qty: float = 0.0
-    avg_fill_price: Optional[float] = None
-    arrival_price: Optional[float] = None      # decision / arrival benchmark
-    limit_price: Optional[float] = None
+    avg_fill_price: float | None = None
+    arrival_price: float | None = None      # decision / arrival benchmark
+    limit_price: float | None = None
     status: ExecutionStatus
     algo: ExecutionAlgoConfig
     paper_mode: bool = True
-    strategy_id: Optional[str] = None
-    child_orders: List[ChildOrder] = []
+    strategy_id: str | None = None
+    child_orders: list[ChildOrder] = []
     created_at: datetime
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    implementation_shortfall_bps: Optional[float] = None
-    vwap_deviation_bps: Optional[float] = None
-    notes: Optional[str] = None
-    risk_score_at_submission: Optional[float] = None
-    rejection_reason: Optional[str] = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    implementation_shortfall_bps: float | None = None
+    vwap_deviation_bps: float | None = None
+    notes: str | None = None
+    risk_score_at_submission: float | None = None
+    rejection_reason: str | None = None
 
 
 class ExecutionAnalytics(BaseModel):
@@ -161,18 +163,18 @@ class ExecutionAnalytics(BaseModel):
     arrival_price: float
     avg_fill_price: float
     implementation_shortfall_bps: float
-    vwap_benchmark: Optional[float] = None
-    vwap_deviation_bps: Optional[float] = None
-    twap_benchmark: Optional[float] = None
+    vwap_benchmark: float | None = None
+    vwap_deviation_bps: float | None = None
+    twap_benchmark: float | None = None
     total_fees: float
     total_notional: float
     fill_ratio: float
     num_child_orders: int
     num_venues: int
-    duration_seconds: Optional[float] = None
-    participation_rate_realized: Optional[float] = None
-    max_slice_impact_bps: Optional[float] = None
-    venue_breakdown: List[Dict[str, Any]] = []
+    duration_seconds: float | None = None
+    participation_rate_realized: float | None = None
+    max_slice_impact_bps: float | None = None
+    venue_breakdown: list[dict[str, Any]] = []
 
 
 class ExecutionAlgoInfo(BaseModel):
@@ -181,10 +183,10 @@ class ExecutionAlgoInfo(BaseModel):
     name: str
     short_description: str
     how_it_works: str
-    best_for: List[str]
-    weaknesses: List[str]
+    best_for: list[str]
+    weaknesses: list[str]
     crypto_notes: str
-    typical_params: Dict[str, Any]
+    typical_params: dict[str, Any]
     phase2_ready: bool = True
 
 
@@ -203,13 +205,13 @@ class ExecutionEngineProtocol:
     async def cancel_parent_order(self, user_id: str, parent_id: str) -> ParentOrder:
         raise NotImplementedError
 
-    async def get_parent_order(self, user_id: str, parent_id: str) -> Optional[ParentOrder]:
+    async def get_parent_order(self, user_id: str, parent_id: str) -> ParentOrder | None:
         raise NotImplementedError
 
-    async def list_parent_orders(self, user_id: str, status: Optional[str] = None) -> List[ParentOrder]:
+    async def list_parent_orders(self, user_id: str, status: str | None = None) -> list[ParentOrder]:
         raise NotImplementedError
 
-    async def get_analytics(self, user_id: str, parent_id: str) -> Optional[ExecutionAnalytics]:
+    async def get_analytics(self, user_id: str, parent_id: str) -> ExecutionAnalytics | None:
         raise NotImplementedError
 
     async def recommend_algo(

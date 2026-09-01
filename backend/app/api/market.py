@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Query, HTTPException
-from typing import List, Optional
-from app.services.market_data import market_data_service
-from app.core.market_providers import CRYPTO_UNIVERSE, STOCK_UNIVERSE, ETF_UNIVERSE
-from app.models.schemas import PriceQuote, MarketOverview, AssetClass
+
+from fastapi import APIRouter, HTTPException, Query
+
+from app.core.market_providers import CRYPTO_UNIVERSE, ETF_UNIVERSE, STOCK_UNIVERSE
 from app.engines.signal_engine import signal_engine
-from app.models.schemas import TradeIdea, CorrelationPair
+from app.models.schemas import AssetClass, CorrelationPair, MarketOverview, PriceQuote, TradeIdea
+from app.services.market_data import market_data_service
 
 router = APIRouter(prefix="/market", tags=["market"])
 
@@ -14,7 +14,7 @@ async def market_overview():
     return await market_data_service.get_crypto_overview()
 
 
-@router.get("/prices", response_model=List[PriceQuote])
+@router.get("/prices", response_model=list[PriceQuote])
 async def get_prices(
     symbols: str = Query(..., description="Comma-separated symbols"),
     asset_class: AssetClass = AssetClass.CRYPTO,
@@ -47,12 +47,12 @@ async def asset_detail(symbol: str, asset_class: AssetClass = AssetClass.CRYPTO)
     }
 
 
-@router.get("/signals", response_model=List[TradeIdea])
+@router.get("/signals", response_model=list[TradeIdea])
 async def list_signals(limit: int = 10):
     return await signal_engine.generate_sample_signals(limit=limit)
 
 
-@router.get("/correlations", response_model=List[CorrelationPair])
+@router.get("/correlations", response_model=list[CorrelationPair])
 async def correlations():
     """Phase 1 sample correlation radar data."""
     return [

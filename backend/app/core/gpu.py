@@ -20,7 +20,6 @@ catalog cloud-reference rate is used for BOTH lanes (zero-margin assumption —
 no synthetic profitability is invented).
 """
 
-from typing import Dict, Optional
 
 HOURS_PER_DAY = 24.0
 DAYS_PER_MONTH = 30.0
@@ -29,7 +28,7 @@ KW_PER_MW = 1000.0
 # ---------- GPU catalog ----------
 # Reference hardware + indicative street capex and cloud rental (market
 # reference, user-editable inputs, NOT live quotes). Power draws are TGP.
-GPU_CATALOG: Dict[str, dict] = {
+GPU_CATALOG: dict[str, dict] = {
     "H100": {"model": "NVIDIA H100 SXM (80GB)", "power_kw": 0.700, "capex_usd": 25000.0, "cloud_rental_usd_hr": 2.50},
     "H200": {"model": "NVIDIA H200 (141GB)", "power_kw": 0.700, "capex_usd": 30000.0, "cloud_rental_usd_hr": 3.00},
     "B200": {"model": "NVIDIA B200 (192GB)", "power_kw": 1.000, "capex_usd": 40000.0, "cloud_rental_usd_hr": 4.00},
@@ -39,24 +38,24 @@ GPU_CATALOG: Dict[str, dict] = {
 }
 
 
-def gpu_for(model: str) -> Optional[dict]:
+def gpu_for(model: str) -> dict | None:
     return GPU_CATALOG.get(model) or next(
         (v for v in GPU_CATALOG.values() if v["model"].lower() == model.lower()), None
     )
 
 
 def resolve_gpu(
-    model: Optional[str],
-    capex_usd: Optional[float],
-    power_kw: Optional[float],
-    cloud_rental_usd_hr: Optional[float],
-) -> Dict:
+    model: str | None,
+    capex_usd: float | None,
+    power_kw: float | None,
+    cloud_rental_usd_hr: float | None,
+) -> dict:
     """Build the effective GPU spec from catalog + user overrides.
 
     Returns None-equivalent via raise? No — returns a dict; callers check
     whether a model/custom spec was provided by testing `spec.get("present")`.
     """
-    spec: Dict = {"present": False}
+    spec: dict = {"present": False}
     if model:
         item = gpu_for(model)
         if item:
@@ -73,14 +72,14 @@ def resolve_gpu(
 
 def gpu_economics(
     *,
-    gpu: Dict,
+    gpu: dict,
     achieved_rental_usd_hr: float,
     cloud_rental_usd_hr: float,
     utilization_pct: float,
     uptime_pct: float,
     electricity_usd_kwh: float,
     pue: float = 1.0,
-) -> Dict:
+) -> dict:
     """Per-GPU economics on the SAME frame as mining compute_estimate.
 
     billable_hours = uptime_hours * utilization (fraction of installed time

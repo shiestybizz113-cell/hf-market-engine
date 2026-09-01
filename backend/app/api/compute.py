@@ -10,15 +10,15 @@ capital engine picks the best cloud rate when the operator has not manually
 overridden it.
 """
 
-from typing import Optional
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from app.api.auth import get_current_user
 from app.core import evidence as E
+from app.core.database import get_db
 from app.core.evidence_broker import capture_observation
 from app.core.gpu import GPU_CATALOG
-from app.api.auth import get_current_user
-from app.core.database import get_db
 
 router = APIRouter(prefix="/compute", tags=["compute"])
 
@@ -31,13 +31,13 @@ class ComputeOfferRequest(BaseModel):
     provider: str = Field(description="Cloud provider name")
     price_per_gpu_hour: float = Field(gt=0)
     billing: str = Field(default="on_demand")
-    region: Optional[str] = None
+    region: str | None = None
     quantity: int = Field(ge=1, default=1)
     currency: str = Field(default="USD")
     min_commitment_hours: int = Field(ge=0, default=0)
     availability: str = Field(default="available")
-    source_reference: Optional[str] = None
-    observed_at: Optional[str] = None
+    source_reference: str | None = None
+    observed_at: str | None = None
 
 
 @router.post("/offers")
@@ -82,7 +82,7 @@ async def post_compute_offer(
 
 @router.get("/offers")
 async def get_compute_offers(
-    gpu_model: Optional[str] = None,
+    gpu_model: str | None = None,
     current_user=Depends(get_current_user),
 ):
     """Ranked eligible facts per GPU model. Always includes reference catalog."""

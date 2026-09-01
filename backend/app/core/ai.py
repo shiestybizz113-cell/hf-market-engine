@@ -14,14 +14,13 @@ exact state that produced it. AI analyzes and recommends; it never executes.
 """
 
 import time
-import uuid
-import httpx
-from typing import Dict, Optional, Tuple
 
+import httpx
+
+from app.core import alerting, budget
+from app.core.archisynapse import build_receipt, persist_receipt
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.archisynapse import build_receipt, persist_receipt
-from app.core import alerting, budget
 
 _OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 _GROK_URL = "https://api.x.ai/v1/chat/completions"
@@ -40,7 +39,7 @@ _MODEL_RATES = {
 _DEFAULT_RATES = (0.30, 1.00)
 
 
-def provider() -> Tuple[str, str, str]:
+def provider() -> tuple[str, str, str]:
     """Resolve (provider, base_url, api_key). Empty key means template mode."""
     if settings.GROK_API_KEY:
         return "grok", _GROK_URL, settings.GROK_API_KEY
@@ -56,7 +55,7 @@ def default_model(provider_name: str) -> str:
     }.get(provider_name, "gpt-4o-mini")
 
 
-def provider_info() -> Dict:
+def provider_info() -> dict:
     name, _, _ = provider()
     return {
         "provider": name,
@@ -65,7 +64,7 @@ def provider_info() -> Dict:
     }
 
 
-async def _chat(system: str, user: str, max_tokens: int) -> Optional[str]:
+async def _chat(system: str, user: str, max_tokens: int) -> str | None:
     name, url, key = provider()
     if not key:
         return None
@@ -115,8 +114,8 @@ async def _persist_receipt(
     model: str,
     provider_name: str,
     fallback_used: bool,
-    user_id: Optional[str] = None,
-    extra: Optional[Dict] = None,
+    user_id: str | None = None,
+    extra: dict | None = None,
     simulation: bool = False,
 ) -> None:
     """
@@ -161,10 +160,10 @@ async def _persist_receipt(
 
 
 # In-process TTL cache: {key: (expires_at, text)}
-_cache: Dict[str, Tuple[float, str]] = {}
+_cache: dict[str, tuple[float, str]] = {}
 
 
-def _cache_get(key: str) -> Optional[str]:
+def _cache_get(key: str) -> str | None:
     entry = _cache.get(key)
     if not entry:
         return None
@@ -199,11 +198,11 @@ async def generate(
     user: str,
     fallback: str,
     *,
-    cache_key: Optional[str] = None,
-    job: Optional[str] = None,
-    user_id: Optional[str] = None,
+    cache_key: str | None = None,
+    job: str | None = None,
+    user_id: str | None = None,
     simulation: bool = False,
-    extra: Optional[Dict] = None,
+    extra: dict | None = None,
 ) -> str:
     """Return analysis text or the fallback. Never raises.
 
@@ -308,9 +307,9 @@ async def thesis_for(
     asset: str,
     asset_class: str,
     quote_text: str,
-    regime: Optional[str],
+    regime: str | None,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     fallback = (
@@ -339,11 +338,11 @@ async def thesis_for(
 async def journal_review_for(
     asset: str,
     direction: str,
-    pnl: Optional[float],
+    pnl: float | None,
     source: str,
-    notes: Optional[str],
+    notes: str | None,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     result = "profitable" if pnl is not None and pnl > 0 else "losing"
@@ -375,7 +374,7 @@ async def post_trade_review_for(
     direction: str,
     pnl: float,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     result = "profitable" if pnl > 0 else "losing"
@@ -402,9 +401,9 @@ async def post_trade_review_for(
 
 
 async def backtest_review_for(
-    metrics: Dict,
+    metrics: dict,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     ret = metrics.get("total_return_pct")
@@ -460,9 +459,9 @@ async def backtest_review_for(
 
 
 async def mining_review_for(
-    context: Dict,
+    context: dict,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     """Explain whether a mining setup is profitable, grounded in the numbers."""
@@ -532,9 +531,9 @@ async def mining_review_for(
 
 
 async def scenario_review_for(
-    context: Dict,
+    context: dict,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     """Narrate a scenario run: which case hurts most, what flips it."""
@@ -592,9 +591,9 @@ async def scenario_review_for(
 
 
 async def allocation_review_for(
-    context: Dict,
+    context: dict,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     """Verdict on the capital allocation options, grounded in the numbers."""
@@ -643,9 +642,9 @@ async def allocation_review_for(
 
 
 async def gpu_review_for(
-    context: Dict,
+    context: dict,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     """Verdict on build-vs-cloud GPU economics, grounded in the assumptions."""
@@ -699,9 +698,9 @@ async def gpu_review_for(
 
 
 async def mine_vs_buy_review_for(
-    context: Dict,
+    context: dict,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     """Verdict on mine-vs-buy, honoring the reconciled capital accounting."""
@@ -778,9 +777,9 @@ async def mine_vs_buy_review_for(
 
 
 async def capital_review_for(
-    context: Dict,
+    context: dict,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     """AI Capital Council review of a capital allocation run + proposal.

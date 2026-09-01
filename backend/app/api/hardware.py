@@ -15,15 +15,15 @@ GET /hardware/offers returns a ranked list of eligible facts for each ASIC
 model so the operator can see which fact the capital engine would consume.
 """
 
-from typing import Optional
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from app.api.auth import get_current_user
 from app.core import evidence as E
+from app.core.database import get_db
 from app.core.evidence_broker import capture_observation
 from app.core.mining import ASIC_CATALOG
-from app.api.auth import get_current_user
-from app.core.database import get_db
 
 router = APIRouter(prefix="/hardware", tags=["hardware"])
 
@@ -38,15 +38,15 @@ class HardwareQuoteRequest(BaseModel):
     price_usd: float = Field(gt=0)
     currency: str = Field(default="USD")
     source_type: str = Field(default="user_input")
-    source_reference: Optional[str] = Field(default=None)
+    source_reference: str | None = Field(default=None)
     provider: str = Field(default="user_input", description="Who supplied the quote")
-    region: Optional[str] = None
-    condition: Optional[str] = Field(default=None, description="new | used | refurbished")
+    region: str | None = None
+    condition: str | None = Field(default=None, description="new | used | refurbished")
     quantity: int = Field(ge=1, default=1)
-    hashrate_ths: Optional[float] = Field(default=None, description="Override spec if known")
-    power_watts: Optional[float] = Field(default=None)
-    shipping_usd: Optional[float] = Field(default=None)
-    observed_at: Optional[str] = Field(default=None, description="ISO timestamp when the quote was observed")
+    hashrate_ths: float | None = Field(default=None, description="Override spec if known")
+    power_watts: float | None = Field(default=None)
+    shipping_usd: float | None = Field(default=None)
+    observed_at: str | None = Field(default=None, description="ISO timestamp when the quote was observed")
 
 
 @router.post("/offers")
@@ -82,7 +82,7 @@ async def post_hardware_offer(
 
 @router.get("/offers")
 async def get_hardware_offers(
-    model: Optional[str] = None,
+    model: str | None = None,
     current_user=Depends(get_current_user),
 ):
     """Ranked eligible facts for ASIC pricing (best-first).

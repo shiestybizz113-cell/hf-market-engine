@@ -17,8 +17,6 @@ a receipt without a signature is worthless as evidence.
 import hashlib
 import json
 import os
-import secrets
-from typing import Optional, Tuple
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
@@ -26,19 +24,18 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
-    PublicFormat,
-    PrivateFormat,
     NoEncryption,
+    PrivateFormat,
+    PublicFormat,
 )
-
 
 # ── Key management ─────────────────────────────────────────────────────────────
 
-_private_key: Optional[Ed25519PrivateKey] = None
-_public_key_hex: Optional[str] = None
+_private_key: Ed25519PrivateKey | None = None
+_public_key_hex: str | None = None
 
 
-def _load_or_generate_key() -> Tuple[Ed25519PrivateKey, str]:
+def _load_or_generate_key() -> tuple[Ed25519PrivateKey, str]:
     """Load signing key from env, or generate an ephemeral one for dev."""
     global _private_key, _public_key_hex
 
@@ -106,7 +103,7 @@ def canonical_json(obj: dict) -> str:
 
 # ── Signing ───────────────────────────────────────────────────────────────────
 
-def sign(payload_json: str) -> Tuple[str, str]:
+def sign(payload_json: str) -> tuple[str, str]:
     """
     Sign canonical payload JSON with Ed25519.
     Returns (signature_hex, public_key_hex).

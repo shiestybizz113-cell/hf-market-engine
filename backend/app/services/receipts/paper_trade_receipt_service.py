@@ -3,22 +3,34 @@ Paper Trade Receipt Service
 Handles creation and storage of receipts for paper trades.
 """
 
-from datetime import datetime, timezone
-from typing import Optional, List
-from app.receipts import (
-    Receipt, Actor, Authority, Action, ActionType,
-    EnvironmentState, EnvironmentMode, ClaimedOutcome,
-    Verification, VerificationStatus, EvidenceStateLabel,
-    Provenance, ConsentBasis, RetentionPolicy,
-    TrainingDataLicense, AuthorityBasis, SigningKey,
-    KeyRegistry, verify_receipt, build_training_extract
-)
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+
 from app.core.database import get_db
 from app.models.schemas import PaperTradeOut
-import uuid
-import json
-import os
-from pathlib import Path
+from app.receipts import (
+    Action,
+    ActionType,
+    Actor,
+    Authority,
+    AuthorityBasis,
+    ClaimedOutcome,
+    ConsentBasis,
+    EnvironmentMode,
+    EnvironmentState,
+    EvidenceStateLabel,
+    KeyRegistry,
+    Provenance,
+    Receipt,
+    RetentionPolicy,
+    SigningKey,
+    TrainingDataLicense,
+    Verification,
+    VerificationStatus,
+    verify_receipt,
+)
+
 
 class PaperTradeReceiptService:
     def __init__(self):
@@ -75,7 +87,7 @@ class PaperTradeReceiptService:
             key_doc = {
                 "key_id": signing_key.key_id,
                 "public_key": signing_key.public_key,
-                "created_at": datetime.now(timezone.utc),
+                "created_at": datetime.now(UTC),
                 "is_active": True,
                 "key_type": "ed25519",
                 "purpose": "paper_trading"
@@ -105,7 +117,7 @@ class PaperTradeReceiptService:
             key_doc = {
                 "key_id": signing_key.key_id,
                 "public_key": signing_key.public_key,
-                "created_at": datetime.now(timezone.utc),
+                "created_at": datetime.now(UTC),
                 "is_active": True,
                 "key_type": "ed25519",
                 "purpose": "paper_trading"
@@ -212,7 +224,7 @@ class PaperTradeReceiptService:
 
         # Add MongoDB-specific fields
         doc["_id"] = str(receipt.receipt_id)  # Use receipt_id as _id for convenience
-        doc["created_at"] = datetime.now(timezone.utc)
+        doc["created_at"] = datetime.now(UTC)
         return doc
 
     def _persist_receipt_to_file(self, receipt: Receipt) -> None:
@@ -235,7 +247,7 @@ class PaperTradeReceiptService:
                     receipt_dict[key] = value.isoformat()
             json.dump(receipt_dict, f, indent=2)
 
-    async def get_receipt_by_id(self, receipt_id: str) -> Optional[Receipt]:
+    async def get_receipt_by_id(self, receipt_id: str) -> Receipt | None:
         """
         Retrieve a receipt by its ID.
 
@@ -256,7 +268,7 @@ class PaperTradeReceiptService:
             return Receipt(**receipt_doc)
         return None
 
-    async def get_receipts_for_trade(self, trade_id: str) -> List[Receipt]:
+    async def get_receipts_for_trade(self, trade_id: str) -> list[Receipt]:
         """
         Get all receipts associated with a specific trade.
 
@@ -283,7 +295,7 @@ class PaperTradeReceiptService:
                 continue
         return receipts
 
-    async def get_receipts_for_user(self, user_id: str, limit: int = 50) -> List[Receipt]:
+    async def get_receipts_for_user(self, user_id: str, limit: int = 50) -> list[Receipt]:
         """Get receipts for a specific user."""
         # Ensure collections are initialized
         await self._ensure_collections_initialized()

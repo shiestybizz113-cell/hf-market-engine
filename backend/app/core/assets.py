@@ -15,12 +15,11 @@ retired), which supersedes their fleet fact. We evolve, we don't delete.
 """
 
 import uuid
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import UTC, datetime
 
+from app.core import evidence as E
 from app.core.database import get_db
 from app.core.evidence_broker import capture_observation
-from app.core import evidence as E
 
 ASSET_TYPES = ("asic", "gpu", "power", "storage", "treasury")
 
@@ -39,10 +38,10 @@ STATUSES = (ACTIVE, RETIRED)
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
-def normalize_asset(payload: Dict) -> Dict:
+def normalize_asset(payload: dict) -> dict:
     """Validate + fill an asset document from an API payload."""
     asset_type = payload.get("asset_type")
     if asset_type not in ASSET_TYPES:
@@ -57,7 +56,7 @@ def normalize_asset(payload: Dict) -> Dict:
     if units < 1:
         raise ValueError("units must be >= 1")
 
-    doc: Dict = {
+    doc: dict = {
         "asset_type": asset_type,
         "name": payload.get("name") or payload.get("subject") or asset_type,
         "subject": payload.get("subject") or payload.get("name") or asset_type,
@@ -86,7 +85,7 @@ def normalize_asset(payload: Dict) -> Dict:
     return doc
 
 
-async def create_asset(payload: Dict, user_id: str, _db=None) -> Dict:
+async def create_asset(payload: dict, user_id: str, _db=None) -> dict:
     """Create an asset AND its immutable fleet fact. Returns the asset doc."""
     db = _db or get_db()
     doc = normalize_asset(payload)
@@ -100,7 +99,7 @@ async def create_asset(payload: Dict, user_id: str, _db=None) -> Dict:
     return doc
 
 
-async def import_assets(payload: Dict, user_id: str, _db=None) -> Dict:
+async def import_assets(payload: dict, user_id: str, _db=None) -> dict:
     """Bulk import assets. Returns created docs + skipped errors."""
     items = payload.get("assets", [])
     if not isinstance(items, list):
@@ -123,7 +122,7 @@ async def import_assets(payload: Dict, user_id: str, _db=None) -> Dict:
     return {"created": created, "errors": errors}
 
 
-async def _fleet_fact(doc: Dict, _db=None) -> str:
+async def _fleet_fact(doc: dict, _db=None) -> str:
     """Append (or reuse) the fleet fact for an asset."""
     value = float(doc.get("value_usd", 0.0))
     extra = {
@@ -151,7 +150,7 @@ async def _fleet_fact(doc: Dict, _db=None) -> str:
     )
 
 
-async def retire_asset(asset_id: str, user_id: str, _db=None) -> Optional[Dict]:
+async def retire_asset(asset_id: str, user_id: str, _db=None) -> dict | None:
     """Retire an asset: supersede its fleet fact, keep history. Returns doc."""
     db = _db or get_db()
     asset = await db.assets.find_one({"_id": asset_id, "user_id": user_id})
@@ -183,7 +182,7 @@ async def retire_asset(asset_id: str, user_id: str, _db=None) -> Optional[Dict]:
     return asset
 
 
-async def reactivate_asset(asset_id: str, user_id: str, _db=None) -> Optional[Dict]:
+async def reactivate_asset(asset_id: str, user_id: str, _db=None) -> dict | None:
     db = _db or get_db()
     asset = await db.assets.find_one({"_id": asset_id, "user_id": user_id})
     if not asset:
@@ -199,9 +198,9 @@ async def reactivate_asset(asset_id: str, user_id: str, _db=None) -> Optional[Di
     return asset
 
 
-async def list_assets(user_id: str, _db=None, active_only: bool = False) -> List[Dict]:
+async def list_assets(user_id: str, _db=None, active_only: bool = False) -> list[dict]:
     db = _db or get_db()
-    query: Dict = {"user_id": user_id}
+    query: dict = {"user_id": user_id}
     if active_only:
         query["status"] = ACTIVE
     cursor = db.assets.find(query).sort("created_at", -1)
@@ -212,10 +211,10 @@ async def list_assets(user_id: str, _db=None, active_only: bool = False) -> List
     return out
 
 
-async def fleet_summary(user_id: str, _db=None) -> Dict:
+async def fleet_summary(user_id: str, _db=None) -> dict:
     """Aggregate active assets into the fleet block the capital engine uses."""
     assets = await list_assets(user_id, _db, active_only=True)
-    summary: Dict = {
+    summary: dict = {
         "asics": {"units": 0, "hashrate_ths": 0.0, "power_kw": 0.0, "value_usd": 0.0, "models": []},
         "gpus": {"units": 0, "power_kw": 0.0, "value_usd": 0.0, "models": []},
         "power_mw": 0.0,

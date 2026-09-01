@@ -23,7 +23,6 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 from app.core import alerting
 from app.core.config import settings
@@ -38,7 +37,7 @@ _WINDOW_SECONDS = 24 * 60 * 60
 class BudgetDecision:
     """Result of a pre-flight budget check. Frozen — no post-hoc mutation."""
     allowed: bool
-    reason: Optional[str] = None
+    reason: str | None = None
     user_spend_usd: float = 0.0
     global_spend_usd: float = 0.0
     user_cap_usd: float = 0.0
@@ -49,7 +48,7 @@ class BudgetDecision:
         return not self.allowed
 
 
-async def _spend_since(db, cutoff: float, user_id: Optional[str] = None) -> float:
+async def _spend_since(db, cutoff: float, user_id: str | None = None) -> float:
     """Sum estimated_cost_usd from the receipt ledger since cutoff."""
     match: dict = {"generated_at": {"$gte": cutoff}}
     if user_id is not None:
@@ -65,7 +64,7 @@ async def _spend_since(db, cutoff: float, user_id: Optional[str] = None) -> floa
     return 0.0
 
 
-async def check_budget(db, user_id: Optional[str] = None) -> BudgetDecision:
+async def check_budget(db, user_id: str | None = None) -> BudgetDecision:
     """
     Pre-flight budget check. Call before any paid AI inference.
 
@@ -161,7 +160,7 @@ async def check_budget(db, user_id: Optional[str] = None) -> BudgetDecision:
     )
 
 
-async def spend_summary(db, user_id: Optional[str] = None) -> dict:
+async def spend_summary(db, user_id: str | None = None) -> dict:
     """Read-only spend snapshot for the /system/spend endpoint."""
     cutoff = time.time() - _WINDOW_SECONDS
     try:

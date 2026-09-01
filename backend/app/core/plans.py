@@ -5,9 +5,10 @@ Phase 1: plan stored on user document; gates enforced in API.
 Stripe Checkout upgrades plan via webhook (or dev upgrade endpoint).
 """
 
-from typing import Dict, List, Optional
-from datetime import datetime, timezone
-from fastapi import HTTPException, Depends
+from datetime import UTC, datetime
+
+from fastapi import Depends, HTTPException
+
 from app.api.auth import get_current_user
 from app.core.database import get_db
 
@@ -19,7 +20,7 @@ PLAN_RANK = {
     "white_label": 4,
 }
 
-PLAN_CATALOG: List[Dict] = [
+PLAN_CATALOG: list[dict] = [
     {
         "id": "free",
         "name": "Free",
@@ -115,7 +116,7 @@ PLAN_CATALOG: List[Dict] = [
     },
 ]
 
-FEATURE_MIN_PLAN: Dict[str, str] = {
+FEATURE_MIN_PLAN: dict[str, str] = {
     "paper_trading": "pro",
     "backtesting": "pro",
     "strategy_lab": "pro",
@@ -137,7 +138,7 @@ def plan_rank(plan: str) -> int:
     return PLAN_RANK.get((plan or "free").lower(), 0)
 
 
-def plan_meta(plan: str) -> Dict:
+def plan_meta(plan: str) -> dict:
     """Catalog entry for a plan id (defaults to Free)."""
     return next((p for p in PLAN_CATALOG if p["id"] == plan), PLAN_CATALOG[0])
 
@@ -154,7 +155,7 @@ async def ai_reviews_remaining(user: dict) -> int:
     """Reviews left for the current calendar month on the user's current plan."""
     plan = user.get("plan", "free")
     limit = ai_review_allowance(plan)
-    period = datetime.now(timezone.utc).strftime("%Y-%m")
+    period = datetime.now(UTC).strftime("%Y-%m")
     if user.get("ai_review_period") != period:
         return limit
     return max(0, limit - int(user.get("ai_reviews_used", 0)))
@@ -170,7 +171,7 @@ async def consume_ai_review(user: dict) -> None:
     user_id = user["_id"]
     plan = user.get("plan", "free")
     limit = ai_review_allowance(plan)
-    period = datetime.now(timezone.utc).strftime("%Y-%m")
+    period = datetime.now(UTC).strftime("%Y-%m")
 
     if user.get("ai_review_period") != period:
         await db.users.update_one(
@@ -237,5 +238,5 @@ def require_feature(feature: str):
     return _dep
 
 
-def catalog_public() -> List[Dict]:
+def catalog_public() -> list[dict]:
     return PLAN_CATALOG

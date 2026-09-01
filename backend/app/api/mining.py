@@ -9,24 +9,38 @@ provider, simulation flag) and persists an evidence receipt. Honesty contract:
 """
 
 import uuid
-from datetime import datetime, timezone
-from typing import Dict, Optional, Tuple
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 
+from app.api.auth import get_current_user
 from app.core import ai
+from app.core.database import get_db
 from app.core.mining import (
-    ASIC_CATALOG, asic_for, compute_estimate, fleet_estimate,
-    mine_vs_buy as core_mine_vs_buy, network_data_dict, scenario_table,
+    ASIC_CATALOG,
+    asic_for,
+    compute_estimate,
+    fleet_estimate,
+    network_data_dict,
+    scenario_table,
 )
-from app.core.plans import require_feature, has_feature, try_consume_ai_review
+from app.core.mining import (
+    mine_vs_buy as core_mine_vs_buy,
+)
+from app.core.plans import has_feature, require_feature, try_consume_ai_review
 from app.models.schemas import (
-    AsicModelInfo, MiningEstimateRequest, MiningEstimateResult,
-    MineVsBuyRequest, MineVsBuyResult, MiningScenarioRequest, MiningScenarioResult,
-    MiningFleetRequest, MiningFleetResult, MiningNetworkData,
+    AsicModelInfo,
+    MineVsBuyRequest,
+    MineVsBuyResult,
+    MiningEstimateRequest,
+    MiningEstimateResult,
+    MiningFleetRequest,
+    MiningFleetResult,
+    MiningNetworkData,
+    MiningScenarioRequest,
+    MiningScenarioResult,
 )
 from app.services.mining_data import mining_data_service
-from app.core.database import get_db
-from app.api.auth import get_current_user
 
 router = APIRouter(prefix="/mining", tags=["mining"])
 
@@ -37,7 +51,7 @@ _DISCLAIMER = (
 )
 
 
-def _catalog_item(model: str, custom: Optional[Dict] = None) -> Dict:
+def _catalog_item(model: str, custom: dict | None = None) -> dict:
     if model:
         item = asic_for(model)
         if item:
@@ -62,7 +76,7 @@ def _catalog_item(model: str, custom: Optional[Dict] = None) -> Dict:
     raise HTTPException(status_code=400, detail="Provide asic_model or hashrate_ths + power_watts")
 
 
-async def _live_context() -> Tuple[object, float, bool, Dict]:
+async def _live_context() -> tuple[object, float, bool, dict]:
     """Return (network, btc_price, simulation, provenance)."""
     network = await mining_data_service.network()
     btc_quote = await mining_data_service.btc_price()
@@ -78,9 +92,9 @@ async def _live_context() -> Tuple[object, float, bool, Dict]:
 
 
 async def _persist_mining_receipt(
-    *, user_id: str, analysis_type: str, simulation: bool, flat: Dict,
-    observed: Optional[Dict] = None, assumptions: Optional[Dict] = None,
-    evidence_ids: Optional[list] = None, lanes_evidence: Optional[Dict] = None,
+    *, user_id: str, analysis_type: str, simulation: bool, flat: dict,
+    observed: dict | None = None, assumptions: dict | None = None,
+    evidence_ids: list | None = None, lanes_evidence: dict | None = None,
 ) -> str:
     db = get_db()
     doc = {
@@ -88,7 +102,7 @@ async def _persist_mining_receipt(
         "user_id": user_id,
         "analysis_type": analysis_type,
         "simulation": simulation,
-        "observed_at": datetime.now(timezone.utc),
+        "observed_at": datetime.now(UTC),
         "disclaimer": _DISCLAIMER,
     }
     doc.update(flat)
@@ -105,9 +119,9 @@ async def _persist_mining_receipt(
 
 
 def _estimate_flat(
-    asic: Dict, btc_price: float, btc_provider: str, network, est: Dict,
+    asic: dict, btc_price: float, btc_provider: str, network, est: dict,
     *, electricity_usd_kwh: float, pool_fee_pct: float, uptime_pct: float,
-) -> Dict:
+) -> dict:
     return {
         "btc_price": btc_price,
         "btc_price_provider": btc_provider,

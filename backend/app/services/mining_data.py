@@ -7,10 +7,15 @@ Same honesty contract as market data:
                 return unavailable, never a synthetic live number.
 """
 
-from typing import Optional
+
 from app.core.config import settings
-from app.core.mining import NetworkData, NetworkProvider, BlockchainInfoProvider, DemoNetworkProvider
-from app.models.schemas import PriceQuote, AssetClass
+from app.core.mining import (
+    BlockchainInfoProvider,
+    DemoNetworkProvider,
+    NetworkData,
+    NetworkProvider,
+)
+from app.models.schemas import AssetClass, PriceQuote
 from app.services.market_data import market_data_service
 
 
@@ -22,15 +27,15 @@ class MiningDataService:
     def is_demo(self) -> bool:
         return settings.MARKET_DATA_MODE == "demo"
 
-    async def network(self) -> Optional[NetworkData]:
+    async def network(self) -> NetworkData | None:
         if self.is_demo():
             return await self._demo.fetch()
         return await self._live.fetch()
 
-    async def btc_price(self) -> Optional[PriceQuote]:
+    async def btc_price(self) -> PriceQuote | None:
         return await market_data_service.get_quote("BTC", AssetClass.CRYPTO)
 
-    async def btc_price_value(self) -> Optional[float]:
+    async def btc_price_value(self) -> float | None:
         quote = await self.btc_price()
         return quote.price if quote else None
 

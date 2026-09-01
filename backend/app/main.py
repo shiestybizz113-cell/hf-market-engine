@@ -1,15 +1,31 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-from app.core.database import connect_to_mongo, close_mongo_connection
-from app.core.config import settings
-from app.core.rate_limit import limiter, rate_limit_handler
-from app.core.security_headers import SecurityHeadersMiddleware
-from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from app.api import auth, market, trading, system, execution, journal, billing, evidence, mining, decision, capital
-from app.api import hardware, compute, energy, assets
+
+from app.api import (
+    assets,
+    auth,
+    billing,
+    capital,
+    compute,
+    decision,
+    energy,
+    evidence,
+    execution,
+    hardware,
+    journal,
+    market,
+    mining,
+    system,
+    trading,
+)
+from app.core.config import settings
+from app.core.database import close_mongo_connection, connect_to_mongo
+from app.core.rate_limit import limiter, rate_limit_handler
+from app.core.security_headers import SecurityHeadersMiddleware
 
 
 @asynccontextmanager

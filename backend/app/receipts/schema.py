@@ -13,15 +13,15 @@ assume anything about the host application's existing models.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def new_uuid() -> str:
@@ -115,7 +115,7 @@ class Actor(BaseModel):
 
 
 class Authority(BaseModel):
-    authority_receipt_id: Optional[str] = None
+    authority_receipt_id: str | None = None
     authority_basis: AuthorityBasis
     scope: str
 
@@ -124,7 +124,7 @@ class Action(BaseModel):
     action_type: ActionType
     domain: str
     payload: dict[str, Any]
-    payload_schema_ref: Optional[str] = None
+    payload_schema_ref: str | None = None
 
 
 class EnvironmentState(BaseModel):
@@ -140,11 +140,11 @@ class ClaimedOutcome(BaseModel):
 
 class Verification(BaseModel):
     status: VerificationStatus
-    method: Optional[str] = None
-    verified_by: Optional[str] = None
-    verified_at: Optional[str] = None
+    method: str | None = None
+    verified_by: str | None = None
+    verified_at: str | None = None
     evidence_state_label: EvidenceStateLabel
-    quarantine_reason: Optional[str] = None  # v1.1 addition
+    quarantine_reason: str | None = None  # v1.1 addition
 
 
 class Provenance(BaseModel):
@@ -153,7 +153,7 @@ class Provenance(BaseModel):
     retention_policy: RetentionPolicy
     training_data_license: TrainingDataLicense
     pii_present: bool
-    training_extract_id: Optional[str] = None  # v1.1 addition
+    training_extract_id: str | None = None  # v1.1 addition
 
 
 class GraphLinks(BaseModel):
@@ -187,7 +187,7 @@ class Receipt(BaseModel):
     graph_links: GraphLinks = Field(default_factory=GraphLinks)
 
     # integrity is attached after signing — absent on an unsigned draft
-    integrity: Optional[Integrity] = None
+    integrity: Integrity | None = None
 
     def unsigned_dict(self) -> dict[str, Any]:
         """Everything except the integrity block — this is what gets hashed and signed."""
