@@ -80,6 +80,7 @@ async def _live_context() -> Tuple[object, float, bool, Dict]:
 async def _persist_mining_receipt(
     *, user_id: str, analysis_type: str, simulation: bool, flat: Dict,
     observed: Optional[Dict] = None, assumptions: Optional[Dict] = None,
+    evidence_ids: Optional[list] = None, lanes_evidence: Optional[Dict] = None,
 ) -> str:
     db = get_db()
     doc = {
@@ -95,6 +96,10 @@ async def _persist_mining_receipt(
         doc["observed"] = observed
     if assumptions is not None:
         doc["assumptions"] = assumptions
+    if evidence_ids is not None:
+        doc["evidence_ids"] = evidence_ids
+    if lanes_evidence is not None:
+        doc["lanes_evidence"] = lanes_evidence
     await db.mining_receipts.insert_one(doc)
     return doc["_id"]
 

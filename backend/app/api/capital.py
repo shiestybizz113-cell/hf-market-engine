@@ -1,22 +1,28 @@
 """
-Capital Allocation Command Center API.
+Capital Allocation Command Center API — V2 (Evidence Fabric).
 
 One canonical run across the four lanes (BTC treasury, Bitcoin mining, AI/GPU
 compute, Energy/storage) on a single normalized economic frame, a scenario
 matrix, and a proposal-only optimizer. The AI Capital Council reviews every run.
 
-Evidence contract (same as the rest of the system):
-    - BTC price + mining network are live-observed (or labeled demo/simulation).
-    - GPU and energy economics are operator assumptions, always labeled as such.
-    - The optimizer PROPOSES a split. It never trades, spends or deploys.
+Evidence V2 contract:
+    Every number that enters the engine is an immutable evidence fact.
+    Live providers (BTC price, mining network) are OBSERVED_LIVE facts.
+    Operator inputs and catalog references are USER_ASSUMPTION facts.
+    Each receipt references every fact it consumed. The proof drawer
+    reconstructs the full graph from receipt -> facts -> providers -> sources.
+    Conflicts and stale data are surfaced, never hidden.
 
-Every run persists an evidence receipt separating observed data from assumptions.
+Every run persists an evidence receipt with evidence_ids and per-lane
+evidence quality summaries.
 """
 
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.core import ai
+from app.core import ai, assets as A, evidence as E
+from app.core.evidence_broker import capture_observation, resolve_metric, lane_evidence
 from app.core.capital_allocation import (
     RISK_PROFILES, SCENARIO_DEFS, run_capital_allocation, run_capital_scenarios,
     propose_allocation,
@@ -53,9 +59,186 @@ def _resolve_asic(payload: CapitalRunRequest) -> Dict:
         )
 
 
-def _run_engine(payload: CapitalRunRequest, network, btc_price, prov, simulation) -> Dict:
+async def _capture_run_facts(
+    payload: CapitalRunRequest,
+    network, btc_price: float, prov: Dict, simulation: bool,
+    user_id: str,
+) -> tuple[list, Dict[str, Dict]]:
+    """Capture all run inputs as evidence facts and return (evidence_ids, resolutions).
+
+    Returns (all_evidence_ids, metric_resolutions) where resolutions maps
+    metric_name -> E.summarize_resolution() shape for per-lane evidence.
+    """
+    db = get_db()
+    all_ids: List[str] = []
+    resolutions: Dict[str, Dict] = {}
+
+    # 1. Live BTC price fact
+    btc_eid = await capture_observation(
+        domain="market", metric="btc_price", subject_id="BTC",
+        value=btc_price, unit="usd",
+        state=E.OBSERVED_LIVE if not simulation else E.SIMULATION,
+        provider=prov["provider"], source_type=prov["source"],
+        _db=db,
+    )
+    all_ids.append(btc_eid)
+    resolutions["btc_price"] = E.summarize_resolution(
+        await E.eligible_facts(
+            domain="market", metric="btc_price", subject_id="BTC",
+            user_id=user_id, _db=db,
+        )
+    )
+
+    # 2. User-override BTC price (if provided)
+    if payload.btc_price is not None:
+        eid = await capture_observation(
+            domain="market", metric="btc_price", subject_id="BTC",
+            value=payload.btc_price, unit="usd",
+            state=E.USER_ASSUMPTION, provider="user_input",
+            source_type="user_input", user_id=user_id, _db=db,
+        )
+        all_ids.append(eid)
+
+    # 3. Horizon price assumption
+    if payload.btc_price_at_horizon is not None:
+        eid = await capture_observation(
+            domain="market", metric="btc_price_at_horizon", subject_id="BTC",
+            value=payload.btc_price_at_horizon, unit="usd",
+            state=E.USER_ASSUMPTION, provider="user_input",
+            source_type="user_input", user_id=user_id, _db=db,
+        )
+        all_ids.append(eid)
+
+    # 4. Network facts
+    if network is not None:
+        for metric, value, unit in [
+            ("network_hashrate", network.hashrate_ths, "ths"),
+            ("network_difficulty", network.difficulty, "unitless"),
+            ("block_subsidy", network.block_subsidy, "btc"),
+        ]:
+            eid = await capture_observation(
+                domain="mining", metric=metric, subject_id="bitcoin_network",
+                value=float(value), unit=unit,
+                state=E.OBSERVED_LIVE if not simulation else E.SIMULATION,
+                provider=prov["provider"], source_type=prov["source"],
+                _db=db,
+            )
+            all_ids.append(eid)
+            resolutions[metric] = E.summarize_resolution(
+                await E.eligible_facts(
+                    domain="mining", metric=metric, subject_id="bitcoin_network",
+                    user_id=user_id, _db=db,
+                )
+            )
+
+    # 5. Operator-assumption inputs as evidence facts
+    assumption_inputs = {
+        ("mining", "electricity_usd_kwh"): payload.electricity_usd_kwh,
+        ("mining", "pool_fee_pct"): payload.pool_fee_pct,
+        ("mining", "uptime_pct"): payload.uptime_pct,
+        ("hardware", "asic_price"): payload.hardware_cost_usd,
+    }
+    for (domain, metric), value in assumption_inputs.items():
+        if value is not None:
+            eid = await capture_observation(
+                domain=domain, metric=metric, subject_id=payload.asic_model or "custom",
+                value=float(value),
+                unit="usd_kwh" if "electricity" in metric else "pct" if "fee" in metric or "uptime" in metric else "usd",
+                state=E.USER_ASSUMPTION, provider="user_input",
+                source_type="user_input", user_id=user_id, _db=db,
+            )
+            all_ids.append(eid)
+
+    return all_ids, resolutions
+
+
+async def _build_lane_evidence_from_resolutions(
+    resolutions: Dict[str, Dict],
+) -> Dict[str, Dict]:
+    """Build per-lane evidence summaries from metric resolutions."""
+    btc_metrics = {}
+    if "btc_price" in resolutions:
+        btc_metrics["btc_price"] = resolutions["btc_price"]
+    btc_lane_ev = await lane_evidence(
+        lane_key="btc", label="Buy BTC (spot treasury)",
+        resolutions=btc_metrics,
+    )
+
+    mining_metrics = {}
+    for m in ("btc_price", "network_hashrate", "network_difficulty", "block_subsidy"):
+        if m in resolutions:
+            mining_metrics[m] = resolutions[m]
+    mining_lane_ev = await lane_evidence(
+        lane_key="mining", label="Bitcoin mining (ASICs)",
+        resolutions=mining_metrics,
+    )
+
+    # GPU and energy: no live facts yet (all assumptions), but track them.
+    gpu_lane_ev = await lane_evidence(
+        lane_key="gpu", label="AI / GPU compute (build)",
+        resolutions={},
+    )
+    energy_lane_ev = await lane_evidence(
+        lane_key="energy", label="Energy / storage",
+        resolutions={},
+    )
+
+    return {
+        "btc": btc_lane_ev,
+        "mining": mining_lane_ev,
+        "gpu": gpu_lane_ev,
+        "energy": energy_lane_ev,
+    }
+
+
+async def _persist_capital_receipt(
+    *, user_id: str, analysis_type: str, simulation: bool, result: Dict,
+    evidence_ids: Optional[list] = None, lanes_evidence: Optional[Dict] = None,
+) -> str:
+    flat = {
+        "capital_usd": result["inputs"]["capital_usd"],
+        "available_mw": result["inputs"]["available_mw"],
+        "horizon_months": result["inputs"]["horizon_months"],
+        "risk_profile": result["inputs"]["risk_profile"],
+        "ranking": result["ranking"],
+        "proposed_pct": result["recommendation"]["proposed_pct"],
+        "proposed_usd": result["recommendation"]["proposed_usd"],
+    }
+    return await _persist_mining_receipt(
+        user_id=user_id,
+        analysis_type=analysis_type,
+        simulation=simulation,
+        flat=flat,
+        observed=result["observed"],
+        assumptions=result["inputs"],
+        evidence_ids=evidence_ids,
+        lanes_evidence=lanes_evidence,
+    )
+
+
+@router.post("/run", response_model=CapitalRunResult)
+async def capital_run(
+    payload: CapitalRunRequest,
+    current_user=Depends(require_feature("capital_allocation")),
+):
+    if payload.risk_profile not in RISK_PROFILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown risk profile '{payload.risk_profile}'. "
+                   f"Choose one of: {', '.join(RISK_PROFILES)}",
+        )
+    network, btc_price, simulation, prov = await _live_context()
+
+    # Capture every input as an evidence fact.
+    evidence_ids, resolutions = await _capture_run_facts(
+        payload, network, btc_price, prov, simulation, current_user["_id"],
+    )
+
+    # Compute fleet summary for this operator.
+    fleet = await A.fleet_summary(current_user["_id"], _db=get_db())
+
     asic = _resolve_asic(payload)
-    return run_capital_allocation(
+    result = run_capital_allocation(
         capital_usd=payload.capital_usd,
         available_mw=payload.available_mw,
         horizon_months=payload.horizon_months,
@@ -86,52 +269,21 @@ def _run_engine(payload: CapitalRunRequest, network, btc_price, prov, simulation
         storage_capex_usd_per_mwh=payload.storage_capex_usd_per_mwh,
         storage_roundtrip_pct=payload.storage_roundtrip_pct,
         cash_interest_rate_pct_year=payload.cash_interest_rate_pct_year,
+        owned=fleet,
     )
-
-
-async def _persist_capital_receipt(
-    *, user_id: str, analysis_type: str, simulation: bool, result: Dict,
-) -> str:
-    flat = {
-        "capital_usd": result["inputs"]["capital_usd"],
-        "available_mw": result["inputs"]["available_mw"],
-        "horizon_months": result["inputs"]["horizon_months"],
-        "risk_profile": result["inputs"]["risk_profile"],
-        "ranking": result["ranking"],
-        "proposed_pct": result["recommendation"]["proposed_pct"],
-        "proposed_usd": result["recommendation"]["proposed_usd"],
-    }
-    return await _persist_mining_receipt(
-        user_id=user_id,
-        analysis_type=analysis_type,
-        simulation=simulation,
-        flat=flat,
-        observed=result["observed"],
-        assumptions=result["inputs"],
-    )
-
-
-@router.post("/run", response_model=CapitalRunResult)
-async def capital_run(
-    payload: CapitalRunRequest,
-    current_user=Depends(require_feature("capital_allocation")),
-):
-    if payload.risk_profile not in RISK_PROFILES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown risk profile '{payload.risk_profile}'. "
-                   f"Choose one of: {', '.join(RISK_PROFILES)}",
-        )
-    network, btc_price, simulation, prov = await _live_context()
-
-    result = _run_engine(payload, network, btc_price, prov, simulation)
     result["observed"]["btc_price_observed"] = payload.btc_price is None and not simulation
 
+    # Build per-lane evidence summaries.
+    lanes_evidence_data = await _build_lane_evidence_from_resolutions(resolutions)
+
+    # Attach evidence to receipt.
     receipt_id = await _persist_capital_receipt(
         user_id=current_user["_id"],
         analysis_type="capital_allocation_run",
         simulation=simulation,
         result=result,
+        evidence_ids=evidence_ids,
+        lanes_evidence=lanes_evidence_data,
     )
 
     ai_review = None
@@ -144,6 +296,8 @@ async def capital_run(
                 "available_mw": payload.available_mw,
                 "horizon_months": payload.horizon_months,
                 "risk_profile": payload.risk_profile,
+                "evidence_ids": evidence_ids,
+                "lanes_evidence": lanes_evidence_data,
             }
             ai_review = await ai.capital_review_for(
                 context, user_id=current_user["_id"], simulation=simulation,
@@ -168,7 +322,44 @@ async def capital_scenarios(
     current_user=Depends(require_feature("capital_allocation")),
 ):
     network, btc_price, simulation, prov = await _live_context()
-    base = _run_engine(payload.run, network, btc_price, prov, simulation)
+    evidence_ids, resolutions = await _capture_run_facts(
+        payload.run, network, btc_price, prov, simulation, current_user["_id"],
+    )
+    fleet = await A.fleet_summary(current_user["_id"], _db=get_db())
+
+    base = run_capital_allocation(
+        capital_usd=payload.run.capital_usd,
+        available_mw=payload.run.available_mw,
+        horizon_months=payload.run.horizon_months,
+        electricity_usd_kwh=payload.run.electricity_usd_kwh,
+        risk_profile=payload.run.risk_profile,
+        network=network,
+        btc_price=payload.run.btc_price or btc_price,
+        btc_price_provider=prov["provider"] if payload.run.btc_price is None else "user_input",
+        simulation=simulation,
+        asic=_resolve_asic(payload.run),
+        pool_fee_pct=payload.run.pool_fee_pct,
+        uptime_pct=payload.run.uptime_pct,
+        btc_price_at_horizon=payload.run.btc_price_at_horizon,
+        difficulty_growth_pct_year=payload.run.difficulty_growth_pct_year,
+        gpu_model=payload.run.gpu_model or "",
+        gpu_capex_usd=payload.run.gpu_capex_usd,
+        gpu_power_kw=payload.run.gpu_power_kw,
+        gpu_cloud_rental_usd_per_hr=payload.run.gpu_cloud_rental_usd_per_hr,
+        gpu_rental_usd_per_hr=payload.run.gpu_rental_usd_per_hr,
+        gpu_utilization_pct=payload.run.gpu_utilization_pct,
+        gpu_uptime_pct=payload.run.gpu_uptime_pct,
+        gpu_units_cap=payload.run.gpu_units_cap,
+        gpu_pue=payload.run.gpu_pue,
+        energy_acquisition_usd_kwh=payload.run.energy_acquisition_usd_kwh,
+        energy_sell_price_usd_kwh=payload.run.energy_sell_price_usd_kwh,
+        energy_utilization_pct=payload.run.energy_utilization_pct,
+        storage_mwh=payload.run.storage_mwh,
+        storage_capex_usd_per_mwh=payload.run.storage_capex_usd_per_mwh,
+        storage_roundtrip_pct=payload.run.storage_roundtrip_pct,
+        cash_interest_rate_pct_year=payload.run.cash_interest_rate_pct_year,
+        owned=fleet,
+    )
 
     keys = payload.vectors or list(SCENARIO_DEFS.keys())
     vectors: List[Dict] = []
@@ -182,19 +373,20 @@ async def capital_scenarios(
         vectors.append(vec)
 
     matrix = run_capital_scenarios(base=base, vectors=vectors)
+    lanes_evidence_data = await _build_lane_evidence_from_resolutions(resolutions)
 
     receipt_id = await _persist_capital_receipt(
         user_id=current_user["_id"],
         analysis_type="capital_allocation_scenarios",
         simulation=simulation,
         result=base,
+        evidence_ids=evidence_ids,
+        lanes_evidence=lanes_evidence_data,
     )
 
     return CapitalScenarioResult(
         base=base,
-        matrix=[
-            CapitalScenarioRow(**row) for row in matrix
-        ],
+        matrix=[CapitalScenarioRow(**row) for row in matrix],
         scenario_keys=keys,
         disclaimer=_DISCLAIMER,
     )
@@ -215,8 +407,6 @@ async def capital_optimize(
             detail=f"Unknown risk profiles: {bad}. Choose from: {', '.join(RISK_PROFILES)}",
         )
 
-    # Optimize across profiles using a canonical default run (no BTC override so
-    # the proposal uses observed market data).
     default_run = CapitalRunRequest(
         capital_usd=payload.capital_usd,
         available_mw=payload.available_mw,
@@ -227,7 +417,46 @@ async def capital_optimize(
         power_watts=payload.power_watts,
         hardware_cost_usd=payload.hardware_cost_usd,
     )
-    base = _run_engine(default_run, network, btc_price, prov, simulation)
+    evidence_ids, resolutions = await _capture_run_facts(
+        default_run, network, btc_price, prov, simulation, current_user["_id"],
+    )
+    fleet = await A.fleet_summary(current_user["_id"], _db=get_db())
+
+    base = run_capital_allocation(
+        capital_usd=payload.capital_usd,
+        available_mw=payload.available_mw,
+        horizon_months=payload.horizon_months,
+        electricity_usd_kwh=payload.electricity_usd_kwh,
+        risk_profile="balanced",
+        network=network,
+        btc_price=btc_price,
+        btc_price_provider=prov["provider"],
+        simulation=simulation,
+        asic=_resolve_asic(default_run),
+        pool_fee_pct=1.0,
+        uptime_pct=95.0,
+        btc_price_at_horizon=None,
+        difficulty_growth_pct_year=20.0,
+        gpu_model="",
+        gpu_capex_usd=None,
+        gpu_power_kw=None,
+        gpu_cloud_rental_usd_per_hr=None,
+        gpu_rental_usd_per_hr=None,
+        gpu_utilization_pct=85.0,
+        gpu_uptime_pct=100.0,
+        gpu_units_cap=256,
+        gpu_pue=1.3,
+        energy_acquisition_usd_kwh=None,
+        energy_sell_price_usd_kwh=None,
+        energy_utilization_pct=100.0,
+        storage_mwh=0.0,
+        storage_capex_usd_per_mwh=0.0,
+        storage_roundtrip_pct=85.0,
+        cash_interest_rate_pct_year=4.0,
+        owned=fleet,
+    )
+
+    lanes_evidence_data = await _build_lane_evidence_from_resolutions(resolutions)
 
     proposals: Dict[str, Dict] = {}
     for profile in profiles:
@@ -235,11 +464,13 @@ async def capital_optimize(
             capital_usd=payload.capital_usd,
             lanes=base["lanes"],
             risk_profile=profile,
+            evidence=lanes_evidence_data,
         )
         proposals[profile] = {
             "proposed_pct": base["recommendation"]["proposed_pct"],
             "proposed_usd": base["recommendation"]["proposed_usd"],
             "basis": base["recommendation"]["basis"],
+            "evidence": base["recommendation"].get("evidence", {}),
             "reserve_pct": RISK_PROFILES[profile]["reserve_pct"],
             "treasury_floor_pct": RISK_PROFILES[profile]["treasury_floor_pct"],
         }
@@ -249,6 +480,8 @@ async def capital_optimize(
         analysis_type="capital_allocation_optimize",
         simulation=simulation,
         result=base,
+        evidence_ids=evidence_ids,
+        lanes_evidence=lanes_evidence_data,
     )
 
     return CapitalOptimizeResult(

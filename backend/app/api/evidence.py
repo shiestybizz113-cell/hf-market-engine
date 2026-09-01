@@ -1,9 +1,15 @@
 """
-Evidence receipts API — Archisynapse v1.1
+Evidence receipts + facts API — Archisynapse v1.1 + V2 evidence fabric.
 
 Every AI analysis call produces a cryptographically signed receipt.
 This API lets authenticated users inspect, verify, and audit their
 receipt history.
+
+V2 adds:
+  GET  /evidence/facts              — list immutable evidence facts
+  GET  /evidence/facts/{fact_id}    — single fact with full trace
+  GET  /evidence/graph/{receipt_id} — receipt -> facts -> sources proof graph
+  POST /evidence/seed               — seed reference facts from catalogs
 
 Endpoints:
   GET  /evidence/receipts          — list receipts (paginated, verified inline)
@@ -25,6 +31,10 @@ from app.core.archisynapse import (
     SignedReceipt,
 )
 from app.core.archisynapse.crypto import verify
+from app.core import evidence as E
+from app.core.evidence_broker import capture_observation, now_iso
+from app.core.mining import ASIC_CATALOG
+from app.core.gpu import GPU_CATALOG
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
 
@@ -122,3 +132,116 @@ async def verify_receipt_payload(body: VerifyRequest):
         "message": "Receipt is authentic and unmodified." if valid
                    else "Signature verification FAILED — receipt may have been tampered with.",
     }
+
+
+# --------------------------------------------------------------------------- #
+# V2 Evidence Fabric
+# --------------------------------------------------------------------------- #
+
+@router.get("/facts")
+async def list_facts(
+    domain: Optional[str] = None,
+    metric: Optional[str] = None,
+    subject_id: Optional[str] = None,
+    limit: int = 50,
+    current_user=Depends(get_current_user),
+):
+    """List immutable evidence facts. Scoped to the caller + system facts."""
+    db = get_db()
+    if domain and metric:
+        facts = await E.facts_for(
+            domain=domain, metric=metric, subject_id=subject_id,
+            user_id=current_user["_id"], limit=limit, _db=db,
+        )
+    else:
+        # Broad query: user_id scope, latest facts
+        scope = [None, current_user["_id"]]
+        query: dict = {}
+        if domain:
+            query["domain"] = domain
+        query["user_id"] = {"$in": scope}
+        cursor = db.evidence_facts.find(query).sort("observed_at", -1).limit(limit)
+        facts = []
+        async for doc in cursor:
+            doc.pop("_id", None)
+            facts.append(doc)
+    for f in facts:
+        f["age_seconds"] = round(E.age_seconds(f), 1)
+        f["fresh"] = not E.is_stale(f)
+    return {"count": len(facts), "facts": facts}
+
+
+@router.get("/facts/{fact_id}")
+async def get_fact(
+    fact_id: str,
+    current_user=Depends(get_current_user),
+):
+    """Single evidence fact with full provenance and freshness."""
+    db = get_db()
+    fact = await E.get_fact(fact_id, db)
+    if not fact:
+        raise HTTPException(status_code=404, detail="Evidence fact not found")
+    fact["age_seconds"] = round(E.age_seconds(fact), 1)
+    fact["fresh"] = not E.is_stale(fact)
+    return fact
+
+
+@router.get("/graph/{receipt_id}")
+async def proof_graph(
+    receipt_id: str,
+    current_user=Depends(get_current_user),
+):
+    """Proof graph: receipt -> evidence facts -> sources.
+
+    Reconstructs every calculation the receipt consumed so the proof drawer
+    can show exactly which facts, providers and observations backed each number.
+    """
+    graph = await E.build_proof_graph(receipt_id, current_user["_id"], _db=get_db())
+    if not graph:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+    return graph
+
+
+@router.post("/seed")
+async def seed_reference_facts(
+    current_user=Depends(get_current_user),
+):
+    """Seed reference facts from ASIC + GPU catalogs.
+
+    Idempotent: capture_observation dedupes against the latest fresh fact
+    with the same (domain, metric, subject, provider). Safe to call repeatedly.
+    """
+    db = get_db()
+    seeded = []
+
+    # ASIC reference facts: price + hashrate + power per model.
+    for key, cat in ASIC_CATALOG.items():
+        for metric, value, unit in [
+            ("asic_price", float(cat["price_usd"]), "usd"),
+            ("asic_hashrate", float(cat["hashrate_ths"]), "ths"),
+            ("asic_power", float(cat["power_watts"]), "watts"),
+        ]:
+            eid = await capture_observation(
+                domain="hardware", metric=metric, subject_id=key,
+                value=value, unit=unit, state=E.USER_ASSUMPTION,
+                provider="reference_catalog", source_type="reference",
+                _db=db,
+            )
+            seeded.append({"domain": "hardware", "metric": metric, "subject": key, "fact_id": eid})
+
+    # GPU reference facts: capex + power + cloud rental per model.
+    for key, cat in GPU_CATALOG.items():
+        for metric, value, unit in [
+            ("gpu_capex", float(cat["capex_usd"]), "usd"),
+            ("gpu_power", float(cat["power_kw"]), "kw"),
+            ("compute_offer", float(cat["cloud_rental_usd_hr"]), "usd_hr"),
+        ]:
+            eid = await capture_observation(
+                domain="gpu", metric=metric, subject_id=key,
+                value=value, unit=unit, state=E.USER_ASSUMPTION,
+                provider="reference_catalog", source_type="reference",
+                _db=db,
+            )
+            seeded.append({"domain": "gpu", "metric": metric, "subject": key, "fact_id": eid})
+
+    return {"ok": True, "seeded": len(seeded), "facts": seeded}

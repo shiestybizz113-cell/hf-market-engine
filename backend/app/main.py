@@ -9,6 +9,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from app.api import auth, market, trading, system, execution, journal, billing, evidence, mining, decision, capital
+from app.api import hardware, compute, energy, assets
 
 
 @asynccontextmanager
@@ -68,6 +69,10 @@ app.include_router(evidence.router, prefix="/api")
 app.include_router(mining.router, prefix="/api")
 app.include_router(decision.router, prefix="/api")
 app.include_router(capital.router, prefix="/api")
+app.include_router(hardware.router, prefix="/api")
+app.include_router(compute.router, prefix="/api")
+app.include_router(energy.router, prefix="/api")
+app.include_router(assets.router, prefix="/api")
 
 
 @app.get("/")
