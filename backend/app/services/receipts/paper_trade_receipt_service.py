@@ -11,7 +11,7 @@ from app.receipts import (
     Verification, VerificationStatus, EvidenceStateLabel,
     Provenance, ConsentBasis, RetentionPolicy,
     TrainingDataLicense, AuthorityBasis, SigningKey,
-    KeyRegistry, build_training_extract
+    KeyRegistry, verify_receipt, build_training_extract
 )
 from app.core.database import get_db
 from app.models.schemas import PaperTradeOut
