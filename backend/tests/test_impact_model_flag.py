@@ -11,7 +11,6 @@ from pydantic import ValidationError
 
 from app.core.config import Settings
 
-
 PROD_BASE = dict(
     ENVIRONMENT="production",
     SECRET_KEY="x" * 40,

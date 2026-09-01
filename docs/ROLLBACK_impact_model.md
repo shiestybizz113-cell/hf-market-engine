@@ -106,11 +106,35 @@ figures.** They should not be cited as evidence.
   TWAP from VWAP from POV. Do not use it to rank execution algorithms.
 - No transient decay: this is peak impact, not the post-replenishment residual.
 
+## CI coverage
+
+These tests run on every push to `main`/`develop` and on every PR, under the
+Backend CI job (`pytest tests/ --cov=app --cov-fail-under=70`):
+
+- `tests/test_impact_model_flag.py` — validates the `IMPACT_MODEL` enum guard,
+  production fail-closed on `legacy_random`, and behavioral differences between
+  `none`, `sqrt_law_v1`, and `legacy_random` at the fill-price level.
+- `tests/test_market_impact.py` — validates the closed-form square-root law,
+  regime crossover continuity, Parkinson volatility, budget inversion,
+  realized-impact sign convention, receipt reproducibility, and guard rails.
+- `tests/test_execution_engine.py` — DB-free slice-count/size math, algo
+  recommendation, child-order simulation (limit-price caps, no-invented-cost
+  empty-context behavior), and the DB-touching submit/get/list/analytics/cancel
+  paths against the test Mongo fixture.
+
+Together these give the load-bearing slice 97% line coverage:
+`execution_engine.py` 98%, `market_impact.py` 97%, `config.py` 96% (the last
+few misses in the engine are the journal-failure fallback and the
+zero-remaining `break` — both defensive). The unit tests run in under 500 ms;
+the integration block needs the Mongo fixture used by the rest of the suite.
+
 ## Still open — not addressed by this change
 
-These remain red on the pre-launch checklist and are not closed by shipping
-the impact model:
-
-- No CI. Nothing runs these tests automatically on push.
-- No auth rate limiting.
-- No error reporting or monitoring configured.
+- **CI:** now running on push/PR (`.github/workflows/ci.yml`). Auth rate limiting
+  added in commit `a47b579` (`slowapi` via `app.core.rate_limit`). Both are
+  gated and tested in `tests/test_core.py`.
+- **Error reporting / monitoring:** not yet configured. Alerting hooks exist
+  (`ALERT_WEBHOOK_URL` in `config.py`) but no destination is wired.
+- **Y calibration:** the prefactor `Y = 0.6` is the literature midpoint and has
+  not been fitted against this system's realized fills. All estimates are
+  `ESTIMATED_UNCALIBRATED`.

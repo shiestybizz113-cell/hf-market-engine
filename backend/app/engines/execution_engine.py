@@ -6,32 +6,34 @@ Phase 2 swaps in LiveExecutionEngine (CCXT / exchange APIs / SOR)
 behind the same ExecutionEngineProtocol.
 """
 
-import asyncio
 import random
 import uuid
-from datetime import datetime, timezone, timedelta
-from typing import List, Optional
+from datetime import UTC, datetime, timedelta
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.schemas import AssetClass
+from app.engines.journal_engine import journal_engine
 from app.models.execution import (
-    ExecutionEngineProtocol,
-    ParentOrderCreate,
-    ParentOrder,
     ChildOrder,
     ExecutionAlgoConfig,
     ExecutionAlgoInfo,
     ExecutionAlgoType,
-    ExecutionUrgency,
-    ExecutionStatus,
     ExecutionAnalytics,
+    ExecutionEngineProtocol,
+    ExecutionStatus,
+    ExecutionUrgency,
+    ParentOrder,
+    ParentOrderCreate,
     VenueType,
 )
-from app.engines.journal_engine import journal_engine
+from app.models.schemas import AssetClass
+from app.services.market_impact import (
+    estimate_impact,
+    parkinson_sigma,
+    realized_impact_bps,
+)
 
-
-ALGO_CATALOG: List[ExecutionAlgoInfo] = [
+ALGO_CATALOG: list[ExecutionAlgoInfo] = [
     ExecutionAlgoInfo(
         algo_type=ExecutionAlgoType.MARKET,
         name="Market — Immediate Cross",
@@ -217,7 +219,7 @@ class PaperExecutionEngine(ExecutionEngineProtocol):
             raise ValueError("Live execution disabled in Phase 1 — paper_mode must be True")
 
         db = get_db()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Resolve arrival price from market data (or a plausible default).
         from app.services.market_data import market_data_service
@@ -256,8 +258,12 @@ class PaperExecutionEngine(ExecutionEngineProtocol):
             started_at=now,
             completed_at=now,
             implementation_shortfall_bps=shortfall_bps,
+            # No VWAP benchmark is computed in Phase 1 — there is no intraday
+            # volume curve to compute one against. Left null rather than
+            # invented; the field is Optional for exactly this reason.
             vwap_deviation_bps=None,
             notes=order.notes,
+            # Risk Engine does not yet score submissions. Null until it does.
             risk_score_at_submission=None,
         )
 
@@ -272,61 +278,67 @@ class PaperExecutionEngine(ExecutionEngineProtocol):
 
         return parent
 
-    # ------------------------------------------------------------------
-    # Impact model integration
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _impact_context(quote) -> dict:
-        """Extract ADV and volatility from a market quote for the impact model."""
+        """
+        Extract the inputs the impact model needs from a market quote.
+
+        Returns adv and sigma_daily, either of which may be None. A None here
+        is not an error: it propagates to an INSUFFICIENT_DATA estimate, which
+        is the correct outcome. Do not substitute defaults.
+        """
         if quote is None:
             return {"adv": None, "sigma_daily": None}
-        adv = getattr(quote, "volume_24h", None)
-        high = getattr(quote, "high_24h", None)
-        low = getattr(quote, "low_24h", None)
-        sigma_daily = None
-        if high is not None and low is not None:
-            from app.services.market_impact import parkinson_sigma
-            sigma_daily = parkinson_sigma(high, low)
-        return {"adv": adv, "sigma_daily": sigma_daily}
+        return {
+            "adv": getattr(quote, "volume_24h", None),
+            "sigma_daily": parkinson_sigma(
+                getattr(quote, "high_24h", None),
+                getattr(quote, "low_24h", None),
+            ),
+        }
 
     @staticmethod
     def _slice_impact_bps(
         slice_qty: float,
-        total_qty: float,
-        order,
+        arrival: float,
+        order: ParentOrderCreate,
         ctx: dict,
     ) -> float:
-        """Return impact in bps for a single slice, or 0.0 when unavailable."""
+        """
+        Impact in bps for a single slice, per settings.IMPACT_MODEL.
+
+        Returns 0.0 rather than None because this feeds a fill price, which
+        must be a number. The distinction between "no impact" and "impact
+        unknown" is preserved in the analytics layer, where it is reported as
+        null with an evidence state — not silently rendered as zero.
+        """
         mode = settings.IMPACT_MODEL
 
         if mode == "none":
             return 0.0
 
         if mode == "legacy_random":
-            return random.uniform(0.5, 4.0) + (slice_qty / max(total_qty, 1e-9)) * random.uniform(0.5, 3.0)
+            return random.uniform(0.5, 4.0) + (
+                slice_qty / max(order.quantity, 1e-9)
+            ) * random.uniform(0.5, 3.0)
 
-        # sqrt_law_v1
-        adv = ctx.get("adv")
-        sigma_daily = ctx.get("sigma_daily")
-        if adv is None or sigma_daily is None:
-            return 0.0
-        notional = slice_qty  # unitless ratio, same as qty for paper
-        from app.services.market_impact import estimate_impact
-        est = estimate_impact(notional, adv, sigma_daily=sigma_daily)
-        if est.impact_bps is None:
-            return 0.0
-        return est.impact_bps
+        est = estimate_impact(
+            notional=slice_qty * arrival,
+            adv=ctx.get("adv"),
+            sigma_daily=ctx.get("sigma_daily"),
+        )
+        return est.impact_bps if est.impact_bps is not None else 0.0
 
     async def _simulate_children(
         self, order: ParentOrderCreate, arrival: float, parent_id: str, now: datetime,
-        impact_ctx: Optional[dict] = None,
-    ) -> List[ChildOrder]:
+        impact_ctx: dict | None = None,
+    ) -> list[ChildOrder]:
         algo = order.algo.algo_type
         n = self._slice_count(algo, order.quantity, order.algo)
         remaining = order.quantity
-        children: List[ChildOrder] = []
+        children: list[ChildOrder] = []
         fee_bps = 0.05  # typical taker fee in bps
+        impact_ctx = impact_ctx or {"adv": None, "sigma_daily": None}
 
         for i in range(n):
             if remaining <= 1e-9:
@@ -334,9 +346,13 @@ class PaperExecutionEngine(ExecutionEngineProtocol):
             slice_qty = self._slice_size(algo, order.quantity, n, i)
             slice_qty = min(slice_qty, remaining)
 
-            impact_bps = self._slice_impact_bps(slice_qty, order.quantity, order, impact_ctx or {})
+            # Per-slice impact in bps. Source depends on settings.IMPACT_MODEL:
+            #   sqrt_law_v1   — modeled from slice notional, ADV, and volatility
+            #   none          — no impact applied; fills at arrival
+            #   legacy_random — pre-model random draw (dev only, blocked in prod)
+            impact = self._slice_impact_bps(slice_qty, arrival, order, impact_ctx)
             side_dir = 1 if order.side == "buy" else -1
-            fill_price = arrival * (1 + side_dir * impact_bps / 10000)
+            fill_price = arrival * (1 + side_dir * impact / 10000)
             if order.limit_price:
                 fill_price = min(fill_price, order.limit_price) if order.side == "buy" else max(fill_price, order.limit_price)
 
@@ -388,17 +404,18 @@ class PaperExecutionEngine(ExecutionEngineProtocol):
             raise ValueError("Only queued / working orders can be cancelled")
         await db.execution_orders.update_one(
             {"_id": parent_id},
-            {"$set": {"status": ExecutionStatus.CANCELLED.value, "completed_at": datetime.now(timezone.utc)}},
+            {"$set": {"status": ExecutionStatus.CANCELLED.value, "completed_at": datetime.now(UTC)}},
         )
         doc["status"] = ExecutionStatus.CANCELLED.value
+        doc["completed_at"] = datetime.now(UTC)
         return self._to_model(doc)
 
-    async def get_parent_order(self, user_id: str, parent_id: str) -> Optional[ParentOrder]:
+    async def get_parent_order(self, user_id: str, parent_id: str) -> ParentOrder | None:
         db = get_db()
         doc = await db.execution_orders.find_one({"_id": parent_id, "user_id": user_id})
         return self._to_model(doc) if doc else None
 
-    async def list_parent_orders(self, user_id: str, status: Optional[str] = None) -> List[ParentOrder]:
+    async def list_parent_orders(self, user_id: str, status: str | None = None) -> list[ParentOrder]:
         db = get_db()
         query: dict = {"user_id": user_id}
         if status:
@@ -406,7 +423,7 @@ class PaperExecutionEngine(ExecutionEngineProtocol):
         cursor = db.execution_orders.find(query).sort("created_at", -1).limit(100)
         return [self._to_model(doc) async for doc in cursor]
 
-    async def get_analytics(self, user_id: str, parent_id: str) -> Optional[ExecutionAnalytics]:
+    async def get_analytics(self, user_id: str, parent_id: str) -> ExecutionAnalytics | None:
         db = get_db()
         doc = await db.execution_orders.find_one({"_id": parent_id, "user_id": user_id})
         if not doc:
@@ -415,11 +432,24 @@ class PaperExecutionEngine(ExecutionEngineProtocol):
         total_fees = round(sum(float(c.get("fees", 0)) for c in childs), 6)
         arrival = float(doc.get("arrival_price") or 0)
         avg = float(doc.get("avg_fill_price") or arrival)
+        # Max slice impact, measured from recorded fills against arrival.
+        # This is a MEASURED value derived from stored child fills, not a
+        # model output and not a draw. Null when fills lack prices.
+        slice_impacts = [
+            realized_impact_bps(arrival, float(c["avg_price"]), str(doc.get("side", "buy")))
+            for c in childs
+            if c.get("avg_price")
+        ]
+        slice_impacts = [s for s in slice_impacts if s is not None]
+        max_slice_impact = round(max(slice_impacts), 2) if slice_impacts else None
+
         return ExecutionAnalytics(
             parent_id=parent_id,
             arrival_price=arrival,
             avg_fill_price=avg,
             implementation_shortfall_bps=float(doc.get("implementation_shortfall_bps") or 0),
+            # No intraday volume curve exists in Phase 1, so there is no VWAP
+            # benchmark to report. Null, not a perturbed arrival price.
             vwap_benchmark=None,
             vwap_deviation_bps=doc.get("vwap_deviation_bps"),
             total_fees=total_fees,
@@ -428,8 +458,10 @@ class PaperExecutionEngine(ExecutionEngineProtocol):
             num_child_orders=len(childs),
             num_venues=len({c.get("venue") for c in childs}),
             duration_seconds=None,
+            # Realized participation requires venue volume over the execution
+            # window, which paper mode does not observe. Null until it does.
             participation_rate_realized=None,
-            max_slice_impact_bps=None,
+            max_slice_impact_bps=max_slice_impact,
             venue_breakdown=[],
         )
 
