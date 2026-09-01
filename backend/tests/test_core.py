@@ -91,7 +91,7 @@ async def test_market_overview_returns_data(auth_client: AsyncClient):
 @pytest.mark.asyncio
 async def test_register_success(client: AsyncClient):
     import uuid
-    email = f"reg_{uuid.uuid4().hex[:8]}@ci.local"
+    email = f"reg_{uuid.uuid4().hex[:8]}@example.com"
     r = await client.post("/api/auth/register", json={
         "email": email,
         "password": "ValidPass1!",
@@ -107,7 +107,7 @@ async def test_register_success(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_register_duplicate_email(client: AsyncClient):
     import uuid
-    email = f"dup_{uuid.uuid4().hex[:8]}@ci.local"
+    email = f"dup_{uuid.uuid4().hex[:8]}@example.com"
     payload = {"email": email, "password": "ValidPass1!"}
     await client.post("/api/auth/register", json=payload)
     r = await client.post("/api/auth/register", json=payload)
@@ -118,7 +118,7 @@ async def test_register_duplicate_email(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_login_success(client: AsyncClient):
     import uuid
-    email = f"login_{uuid.uuid4().hex[:8]}@ci.local"
+    email = f"login_{uuid.uuid4().hex[:8]}@example.com"
     password = "LoginPass1!"
     await client.post("/api/auth/register", json={
         "email": email, "password": password
@@ -137,7 +137,7 @@ async def test_login_success(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_login_wrong_password(client: AsyncClient):
     import uuid
-    email = f"badpw_{uuid.uuid4().hex[:8]}@ci.local"
+    email = f"badpw_{uuid.uuid4().hex[:8]}@example.com"
     await client.post("/api/auth/register", json={
         "email": email, "password": "CorrectPass1!"
     })
@@ -184,7 +184,7 @@ async def test_login_rate_limit_enforced(client: AsyncClient):
     After 10 failed attempts in rapid succession, must receive 429.
     """
     import uuid
-    email = f"ratelimit_{uuid.uuid4().hex[:8]}@ci.local"
+    email = f"ratelimit_{uuid.uuid4().hex[:8]}@example.com"
 
     responses = []
     for _ in range(15):
@@ -211,7 +211,7 @@ async def test_register_rate_limit_enforced(client: AsyncClient):
 
     responses = []
     for _ in range(10):
-        email = f"spam_{uuid.uuid4().hex}@ci.local"
+        email = f"spam_{uuid.uuid4().hex}@example.com"
         r = await client.post("/api/auth/register", json={
             "email": email,
             "password": "SpamPass1!",

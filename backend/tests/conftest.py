@@ -11,9 +11,7 @@ The test DB is the real MongoDB service (spun up by CI or local docker-compose).
 Tests use a separate DB name (hf_test) so they never touch production data.
 """
 
-import asyncio
 import os
-import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 
@@ -27,29 +25,28 @@ os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")
 
 from app.main import app
 from app.core.database import connect_to_mongo, close_mongo_connection, get_db
+from app.core.rate_limit import limiter
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Single event loop for the full test session."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
-
-
-@pytest_asyncio.fixture(scope="session", autouse=True)
+@pytest_asyncio.fixture()
 async def _mongo():
-    """Connect to test MongoDB once per session, wipe DB on teardown."""
+    """Connect to test MongoDB per test, wipe DB on teardown.
+
+    NOT autouse — only connected when a test requests client/auth_client.
+    Function-scoped so Motor's loop matches the per-test ASGITransport loop
+    (avoids the BaseHTTPMiddleware loop-hopping RuntimeError).
+    """
     await connect_to_mongo()
     yield
     db = get_db()
     await db.client.drop_database("hf_test")
     await close_mongo_connection()
+    limiter.reset()
 
 
 @pytest_asyncio.fixture()
-async def client() -> AsyncClient:
-    """Fresh async test client per test."""
+async def client(_mongo) -> AsyncClient:
+    """Fresh async test client per test.  Depends on _mongo for DB setup."""
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
@@ -61,7 +58,33 @@ async def client() -> AsyncClient:
 async def auth_client(client: AsyncClient) -> AsyncClient:
     """Authenticated test client — registers + logs in a fresh user."""
     import uuid
-    email = f"test_{uuid.uuid4().hex[:8]}@ci.local"
+    email = f"test_{uuid.uuid4().hex[:8]}@example.com"
+    password = "TestPass1!"
+
+    reg = await client.post("/api/auth/register", json={
+        "email": email,
+        "password": password,
+        "full_name": "CI User",
+    })
+    assert reg.status_code == 200, f"Register failed: {reg.text}"
+
+    login = await client.post(
+        "/api/auth/login",
+        data={"username": email, "password": password},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    assert login.status_code == 200, f"Login failed: {login.text}"
+
+    token = login.json()["access_token"]
+    client.headers["Authorization"] = f"Bearer {token}"
+    return client
+
+
+@pytest_asyncio.fixture()
+async def auth_client(client: AsyncClient) -> AsyncClient:
+    """Authenticated test client — registers + logs in a fresh user."""
+    import uuid
+    email = f"test_{uuid.uuid4().hex[:8]}@example.com"
     password = "TestPass1!"
 
     reg = await client.post("/api/auth/register", json={
