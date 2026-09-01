@@ -152,7 +152,6 @@ def max_watchlist_for(plan: str) -> int:
 
 async def ai_reviews_remaining(user: dict) -> int:
     """Reviews left for the current calendar month on the user's current plan."""
-    db = get_db()
     plan = user.get("plan", "free")
     limit = ai_review_allowance(plan)
     period = datetime.now(timezone.utc).strftime("%Y-%m")
