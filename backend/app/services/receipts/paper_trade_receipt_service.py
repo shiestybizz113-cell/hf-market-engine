@@ -7,6 +7,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
 from app.core.database import get_db
 from app.models.schemas import PaperTradeOut
 from app.receipts import (
@@ -86,7 +88,7 @@ class PaperTradeReceiptService:
             # Store the key in the database
             key_doc = {
                 "key_id": signing_key.key_id,
-                "public_key": signing_key.public_key,
+                "public_key": signing_key.public_key_bytes.hex(),
                 "created_at": datetime.now(UTC),
                 "is_active": True,
                 "key_type": "ed25519",
@@ -116,7 +118,7 @@ class PaperTradeReceiptService:
             # Store the key in the database
             key_doc = {
                 "key_id": signing_key.key_id,
-                "public_key": signing_key.public_key,
+                "public_key": signing_key.public_key_bytes.hex(),
                 "created_at": datetime.now(UTC),
                 "is_active": True,
                 "key_type": "ed25519",
@@ -329,9 +331,10 @@ class PaperTradeReceiptService:
         # Get all active signing keys from database
         keys_cursor = self._get_keys_collection().find({"is_active": True})
         async for key_doc in keys_cursor:
+            pub_bytes = bytes.fromhex(key_doc["public_key"])
             key_registry.register(
                 key_doc["key_id"],
-                key_doc["public_key"]
+                Ed25519PublicKey.from_public_bytes(pub_bytes),
             )
 
         # Verify the receipt
