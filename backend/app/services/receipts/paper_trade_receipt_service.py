@@ -329,7 +329,7 @@ class PaperTradeReceiptService:
         # Get all active signing keys from database
         keys_cursor = self._get_keys_collection().find({"is_active": True})
         async for key_doc in keys_cursor:
-            key_registry.register_key(
+            key_registry.register(
                 key_doc["key_id"],
                 key_doc["public_key"]
             )
