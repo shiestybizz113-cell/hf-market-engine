@@ -1,7 +1,13 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.core.market_providers import CRYPTO_UNIVERSE, ETF_UNIVERSE, STOCK_UNIVERSE
+from app.core.market_providers import (
+    COMMODITY_UNIVERSE,
+    CRYPTO_UNIVERSE,
+    ETF_UNIVERSE,
+    FOREX_UNIVERSE,
+    STOCK_UNIVERSE,
+)
 from app.engines.signal_engine import signal_engine
 from app.models.schemas import AssetClass, CorrelationPair, MarketOverview, PriceQuote, TradeIdea
 from app.services.market_data import market_data_service
@@ -115,4 +121,6 @@ async def universe():
         "crypto": CRYPTO_UNIVERSE,
         "stocks": STOCK_UNIVERSE,
         "etfs": ETF_UNIVERSE,
+        "forex": FOREX_UNIVERSE,
+        "commodities": COMMODITY_UNIVERSE,
     }

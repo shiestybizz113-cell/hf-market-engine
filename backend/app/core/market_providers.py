@@ -51,6 +51,13 @@ STOCK_UNIVERSE: dict[str, dict] = {
     "MSFT": {"name": "Microsoft", "price": 420.0},
     "TSLA": {"name": "Tesla", "price": 240.0},
     "AMZN": {"name": "Amazon", "price": 185.0},
+    "GOOGL": {"name": "Alphabet", "price": 175.0},
+    "META": {"name": "Meta Platforms", "price": 500.0},
+    "NFLX": {"name": "Netflix", "price": 640.0},
+    "AMD": {"name": "Advanced Micro Devices", "price": 160.0},
+    "PLTR": {"name": "Palantir Technologies", "price": 25.0},
+    "SQ": {"name": "Block", "price": 65.0},
+    "HOOD": {"name": "Robinhood Markets", "price": 20.0},
 }
 
 ETF_UNIVERSE: dict[str, dict] = {
@@ -59,12 +66,31 @@ ETF_UNIVERSE: dict[str, dict] = {
     "IWM": {"name": "iShares Russell 2000 ETF", "price": 205.0},
     "GLD": {"name": "SPDR Gold Shares", "price": 230.0},
     "TLT": {"name": "iShares 20+ Year Treasury ETF", "price": 95.0},
+    "ARKK": {"name": "ARK Innovation ETF", "price": 55.0},
+    "VTI": {"name": "Vanguard Total Stock Market ETF", "price": 260.0},
+    "EEM": {"name": "iShares MSCI Emerging Markets ETF", "price": 42.0},
+}
+
+FOREX_UNIVERSE: dict[str, dict] = {
+    "EURUSD": {"name": "Euro / US Dollar", "price": 1.085},
+    "GBPUSD": {"name": "British Pound / US Dollar", "price": 1.270},
+    "USDJPY": {"name": "US Dollar / Japanese Yen", "price": 155.0},
+    "AUDUSD": {"name": "Australian Dollar / US Dollar", "price": 0.665},
+    "USDCAD": {"name": "US Dollar / Canadian Dollar", "price": 1.370},
+    "USDCHF": {"name": "US Dollar / Swiss Franc", "price": 0.910},
+}
+
+COMMODITY_UNIVERSE: dict[str, dict] = {
+    "XAUUSD": {"name": "Gold / USD", "price": 2380.0},
+    "XAGUSD": {"name": "Silver / USD", "price": 29.0},
+    "WTI": {"name": "Crude Oil (WTI)", "price": 78.0},
 }
 
 MACRO_UNIVERSE: dict[str, dict] = {
     "DXY": {"name": "US Dollar Index", "price": 105.5},
-    "XAUUSD": {"name": "Gold / USD", "price": 2380.0},
+    "BTC_DOM": {"name": "BTC Dominance", "price": 52.0},
     "US10Y": {"name": "US 10-Year Yield", "price": 4.3},
+    "VIX": {"name": "CBOE Volatility Index", "price": 15.0},
 }
 
 
@@ -73,6 +99,10 @@ def universe_for(asset_class: AssetClass) -> dict[str, dict]:
         return STOCK_UNIVERSE
     if asset_class == AssetClass.ETF:
         return ETF_UNIVERSE
+    if asset_class == AssetClass.FOREX:
+        return FOREX_UNIVERSE
+    if asset_class == AssetClass.COMMODITY:
+        return COMMODITY_UNIVERSE
     if asset_class == AssetClass.MACRO:
         return MACRO_UNIVERSE
     return CRYPTO_UNIVERSE
@@ -181,8 +211,24 @@ class TwelveDataProvider(QuoteProvider):
 
     _MACRO_MAP = {
         "DXY": "DXY",
-        "XAUUSD": "XAU/USD",
         "US10Y": "US10Y",
+        "VIX": "VIX",
+        "BTC_DOM": "BTC.D",
+    }
+
+    _FOREX_MAP = {
+        "EURUSD": "EUR/USD",
+        "GBPUSD": "GBP/USD",
+        "USDJPY": "USD/JPY",
+        "AUDUSD": "AUD/USD",
+        "USDCAD": "USD/CAD",
+        "USDCHF": "USD/CHF",
+    }
+
+    _COMMODITY_MAP = {
+        "XAUUSD": "XAU/USD",
+        "XAGUSD": "XAG/USD",
+        "WTI": "WTI",
     }
 
     def __init__(self) -> None:
@@ -191,6 +237,10 @@ class TwelveDataProvider(QuoteProvider):
     def _provider_symbol(self, symbol: str, asset_class: AssetClass) -> str:
         if asset_class == AssetClass.MACRO:
             return self._MACRO_MAP.get(symbol, symbol)
+        if asset_class == AssetClass.FOREX:
+            return self._FOREX_MAP.get(symbol, symbol)
+        if asset_class == AssetClass.COMMODITY:
+            return self._COMMODITY_MAP.get(symbol, symbol)
         return symbol
 
     async def quotes(self, symbols: list[str], asset_class: AssetClass) -> list[NormalizedQuote]:
@@ -299,7 +349,13 @@ class ProviderRegistry:
         # live mode: real providers only, missing data stays missing.
         if asset_class == AssetClass.CRYPTO:
             return [self._crypto]
-        if asset_class in (AssetClass.STOCK, AssetClass.ETF, AssetClass.MACRO):
+        if asset_class in (
+            AssetClass.STOCK,
+            AssetClass.ETF,
+            AssetClass.MACRO,
+            AssetClass.FOREX,
+            AssetClass.COMMODITY,
+        ):
             return [self._securities] if self._securities else []
         return []
 

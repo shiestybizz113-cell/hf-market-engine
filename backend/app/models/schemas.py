@@ -17,6 +17,7 @@ class AssetClass(str, Enum):
     STOCK = "stock"
     ETF = "etf"
     FOREX = "forex"
+    COMMODITY = "commodity"
     MACRO = "macro"
     DEFI = "defi"
 
