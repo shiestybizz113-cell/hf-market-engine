@@ -4,8 +4,10 @@ from fastapi import APIRouter, HTTPException, Query
 from app.core.market_providers import (
     COMMODITY_UNIVERSE,
     CRYPTO_UNIVERSE,
+    DEFI_UNIVERSE,
     ETF_UNIVERSE,
     FOREX_UNIVERSE,
+    MACRO_UNIVERSE,
     STOCK_UNIVERSE,
 )
 from app.engines.alpha_scanner import alpha_scanner
@@ -108,4 +110,6 @@ async def universe():
         "etfs": ETF_UNIVERSE,
         "forex": FOREX_UNIVERSE,
         "commodities": COMMODITY_UNIVERSE,
+        "macro": MACRO_UNIVERSE,
+        "defi": DEFI_UNIVERSE,
     }

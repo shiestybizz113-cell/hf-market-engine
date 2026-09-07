@@ -110,7 +110,7 @@ class MarketDataService:
         quotes = await self._class_quotes(asset_class)
         if symbol in quotes:
             return quotes[symbol]
-        if asset_class == AssetClass.CRYPTO:
+        if asset_class in (AssetClass.CRYPTO, AssetClass.DEFI):
             for ticker, meta in universe_for(asset_class).items():
                 if (meta.get("id") or "").lower() == symbol.lower():
                     return quotes.get(ticker)

@@ -12,6 +12,7 @@ import pytest
 from app.core.market_providers import (
     COMMODITY_UNIVERSE,
     CRYPTO_UNIVERSE,
+    DEFI_UNIVERSE,
     ETF_UNIVERSE,
     FOREX_UNIVERSE,
     MACRO_UNIVERSE,
@@ -32,6 +33,7 @@ EXPECTED_ETFS = {"SPY", "QQQ", "IWM", "GLD", "TLT", "ARKK", "VTI", "EEM"}
 EXPECTED_FOREX = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF"}
 EXPECTED_COMMODITIES = {"XAUUSD", "XAGUSD", "WTI"}
 EXPECTED_MACRO = {"DXY", "BTC_DOM", "US10Y", "VIX"}
+EXPECTED_DEFI = {"UNI", "AAVE", "LDO", "CRV", "MKR", "COMP", "SUSHI", "SNX", "PERP", "GMX"}
 
 
 # --------------------------------------------------------------------------
@@ -57,6 +59,7 @@ def test_commodity_asset_class_exists():
     (FOREX_UNIVERSE, EXPECTED_FOREX),
     (COMMODITY_UNIVERSE, EXPECTED_COMMODITIES),
     (MACRO_UNIVERSE, EXPECTED_MACRO),
+    (DEFI_UNIVERSE, EXPECTED_DEFI),
 ])
 def test_universe_contains_spec_symbols(universe, expected):
     assert expected <= set(universe), f"Missing symbols: {expected - set(universe)}"
@@ -66,6 +69,7 @@ def test_universe_entries_have_names_and_prices():
     for universe in (
         CRYPTO_UNIVERSE, STOCK_UNIVERSE, ETF_UNIVERSE,
         FOREX_UNIVERSE, COMMODITY_UNIVERSE, MACRO_UNIVERSE,
+        DEFI_UNIVERSE,
     ):
         for sym, meta in universe.items():
             assert meta["name"], f"{sym} is missing a display name"
@@ -79,12 +83,14 @@ def test_forex_prices_are_realistic_pair_scales():
 
 
 def test_crypto_entries_have_coingecko_ids():
-    for sym, meta in CRYPTO_UNIVERSE.items():
-        assert meta["id"], f"{sym} is missing its CoinGecko id"
+    for universe in (CRYPTO_UNIVERSE, DEFI_UNIVERSE):
+        for sym, meta in universe.items():
+            assert meta["id"], f"{sym} is missing its CoinGecko id"
 
 
 @pytest.mark.parametrize("asset_class,universe", [
     (AssetClass.CRYPTO, CRYPTO_UNIVERSE),
+    (AssetClass.DEFI, DEFI_UNIVERSE),
     (AssetClass.STOCK, STOCK_UNIVERSE),
     (AssetClass.ETF, ETF_UNIVERSE),
     (AssetClass.FOREX, FOREX_UNIVERSE),
@@ -95,16 +101,13 @@ def test_universe_for_routes_all_supported_classes(asset_class, universe):
     assert universe_for(asset_class) is universe
 
 
-def test_universe_for_defaults_unlisted_class_to_crypto():
-    assert universe_for(AssetClass.DEFI) is CRYPTO_UNIVERSE
-
-
 # --------------------------------------------------------------------------
 # DemoProvider contract
 # --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("asset_class", [
     AssetClass.CRYPTO,
+    AssetClass.DEFI,
     AssetClass.STOCK,
     AssetClass.ETF,
     AssetClass.FOREX,
@@ -141,8 +144,9 @@ def test_demo_quotes_never_zero_or_negative():
     async def _all():
         out = []
         for asset_class in (
-            AssetClass.CRYPTO, AssetClass.STOCK, AssetClass.ETF,
-            AssetClass.FOREX, AssetClass.COMMODITY, AssetClass.MACRO,
+            AssetClass.CRYPTO, AssetClass.DEFI, AssetClass.STOCK,
+            AssetClass.ETF, AssetClass.FOREX, AssetClass.COMMODITY,
+            AssetClass.MACRO,
         ):
             out.extend(await provider.quotes(list(universe_for(asset_class)), asset_class))
         return out
@@ -194,12 +198,24 @@ def test_registry_demo_mode_forces_demo_for_all_classes(monkeypatch):
 
     registry = ProviderRegistry()
     for asset_class in (
-        AssetClass.CRYPTO, AssetClass.STOCK, AssetClass.ETF,
+        AssetClass.CRYPTO, AssetClass.DEFI, AssetClass.STOCK, AssetClass.ETF,
         AssetClass.FOREX, AssetClass.COMMODITY, AssetClass.MACRO,
     ):
         providers = registry.providers_for(asset_class)
         assert providers
         assert all(p.provider_id == "demo" for p in providers)
+
+
+def test_registry_live_mode_routes_crypto_family_to_coingecko(monkeypatch):
+    import app.core.market_providers as mp
+
+    monkeypatch.setattr(mp.settings, "MARKET_DATA_MODE", "live")
+
+    registry = ProviderRegistry()
+    for asset_class in (AssetClass.CRYPTO, AssetClass.DEFI):
+        providers = registry.providers_for(asset_class)
+        assert providers, f"{asset_class} should have a live provider"
+        assert all(p.provider_id == "coingecko" for p in providers)
 
 
 async def test_registry_get_quotes_covers_commodity_in_demo_mode(monkeypatch):
@@ -219,13 +235,17 @@ async def test_universe_endpoint_includes_forex_and_commodity(client):
     r = await client.get("/api/market/universe")
     assert r.status_code == 200
     body = r.json()
-    assert set(body) >= {"crypto", "stocks", "etfs", "forex", "commodities"}
+    assert set(body) >= {
+        "crypto", "stocks", "etfs", "forex", "commodities", "macro", "defi",
+    }
     assert "XAUUSD" in body["commodities"]
     assert "EURUSD" in body["forex"]
+    assert "UNI" in body["defi"]
+    assert "DXY" in body["macro"]
 
 
 async def test_movers_endpoint_works_for_each_asset_class(client):
-    for asset_class in ("crypto", "stock", "etf", "forex", "commodity", "macro"):
+    for asset_class in ("crypto", "defi", "stock", "etf", "forex", "commodity", "macro"):
         r = await client.get(f"/api/market/movers?asset_class={asset_class}")
         assert r.status_code == 200, f"{asset_class} movers failed: {r.text}"
         body = r.json()
@@ -249,3 +269,20 @@ async def test_prices_endpoint_commodity(client):
     quotes = r.json()
     assert {q["symbol"] for q in quotes} == {"XAUUSD", "WTI"}
     assert all(q["asset_class"] == "commodity" for q in quotes)
+
+
+async def test_prices_endpoint_defi(client):
+    r = await client.get("/api/market/prices?asset_class=defi&symbols=UNI,AAVE")
+    assert r.status_code == 200
+    quotes = r.json()
+    assert {q["symbol"] for q in quotes} == {"UNI", "AAVE"}
+    assert all(q["asset_class"] == "defi" for q in quotes)
+    assert all(q["source"] == "demo" for q in quotes)
+
+
+async def test_prices_endpoint_macro(client):
+    r = await client.get("/api/market/prices?asset_class=macro&symbols=DXY,VIX")
+    assert r.status_code == 200
+    quotes = r.json()
+    assert {q["symbol"] for q in quotes} == {"DXY", "VIX"}
+    assert all(q["asset_class"] == "macro" for q in quotes)

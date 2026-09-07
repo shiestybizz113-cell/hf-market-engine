@@ -94,6 +94,19 @@ MACRO_UNIVERSE: dict[str, dict] = {
     "VIX": {"name": "CBOE Volatility Index", "price": 15.0},
 }
 
+DEFI_UNIVERSE: dict[str, dict] = {
+    "UNI": {"id": "uniswap", "name": "Uniswap", "price": 9.5},
+    "AAVE": {"id": "aave", "name": "Aave", "price": 95.0},
+    "LDO": {"id": "lido-dao", "name": "Lido DAO", "price": 2.4},
+    "CRV": {"id": "curve-dao-token", "name": "Curve DAO", "price": 0.82},
+    "MKR": {"id": "maker", "name": "Maker", "price": 2600.0},
+    "COMP": {"id": "compound-governance-token", "name": "Compound", "price": 55.0},
+    "SUSHI": {"id": "sushi", "name": "Sushi", "price": 1.15},
+    "SNX": {"id": "synthetix-network-token", "name": "Synthetix", "price": 3.1},
+    "PERP": {"id": "perpetual-protocol", "name": "Perpetual Protocol", "price": 0.95},
+    "GMX": {"id": "gmx", "name": "GMX", "price": 42.0},
+}
+
 
 def universe_for(asset_class: AssetClass) -> dict[str, dict]:
     if asset_class == AssetClass.STOCK:
@@ -106,6 +119,8 @@ def universe_for(asset_class: AssetClass) -> dict[str, dict]:
         return COMMODITY_UNIVERSE
     if asset_class == AssetClass.MACRO:
         return MACRO_UNIVERSE
+    if asset_class == AssetClass.DEFI:
+        return DEFI_UNIVERSE
     return CRYPTO_UNIVERSE
 
 
@@ -146,9 +161,10 @@ class CoinGeckoProvider(QuoteProvider):
         )
 
     async def quotes(self, symbols: list[str], asset_class: AssetClass) -> list[NormalizedQuote]:
-        if asset_class != AssetClass.CRYPTO:
+        if asset_class not in (AssetClass.CRYPTO, AssetClass.DEFI):
             return []
-        ids = [CRYPTO_UNIVERSE[s]["id"] for s in symbols if s in CRYPTO_UNIVERSE]
+        universe = universe_for(asset_class)
+        ids = [universe[s]["id"] for s in symbols if s in universe]
         if not ids:
             return []
         try:
@@ -172,7 +188,7 @@ class CoinGeckoProvider(QuoteProvider):
         now = datetime.now(UTC)
         out: list[NormalizedQuote] = []
         for sym in symbols:
-            meta = CRYPTO_UNIVERSE.get(sym)
+            meta = universe.get(sym)
             if not meta:
                 continue
             coin = raw.get(meta["id"])
@@ -348,7 +364,7 @@ class ProviderRegistry:
             return [self._demo]
 
         # live mode: real providers only, missing data stays missing.
-        if asset_class == AssetClass.CRYPTO:
+        if asset_class in (AssetClass.CRYPTO, AssetClass.DEFI):
             return [self._crypto]
         if asset_class in (
             AssetClass.STOCK,
@@ -392,6 +408,9 @@ _DEMO_FACTOR_BETAS: dict[str, float] = {
     "AAPL": 0.8, "MSFT": 0.8, "GOOGL": 0.9, "NFLX": 0.8,
     "QQQ": 0.9, "SPY": 0.7, "IWM": 0.7, "ARKK": 1.1, "VTI": 0.7,
     "EEM": 0.6, "AUDUSD": 0.7, "WTI": 0.6,
+    # DeFi tokens track the crypto risk factor closely
+    "UNI": 1.2, "AAVE": 1.1, "LDO": 1.2, "CRV": 1.1, "MKR": 0.9,
+    "COMP": 1.1, "SUSHI": 1.2, "SNX": 1.1, "PERP": 0.9, "GMX": 1.0,
     # moderately positive
     "EURUSD": 0.5, "GBPUSD": 0.4, "XAUUSD": 0.35, "XAGUSD": 0.6,
     # defensive / safe havens (inverse beta)

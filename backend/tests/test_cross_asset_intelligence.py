@@ -47,7 +47,7 @@ def test_demo_price_series_cross_class_uses_same_seed_domain():
 
 
 @pytest.mark.parametrize("cls", [
-    AssetClass.CRYPTO, AssetClass.STOCK, AssetClass.ETF,
+    AssetClass.CRYPTO, AssetClass.DEFI, AssetClass.STOCK, AssetClass.ETF,
     AssetClass.FOREX, AssetClass.COMMODITY, AssetClass.MACRO,
 ])
 def test_demo_price_series_all_classes(cls):
@@ -251,6 +251,7 @@ async def test_alpha_scan_covers_asset_classes():
     result = await scanner.scan(limit=100)
     classes = {it.asset_class for it in result.items}
     assert AssetClass.CRYPTO in classes
+    assert AssetClass.DEFI in classes
     assert AssetClass.STOCK in classes
     assert AssetClass.ETF in classes
     assert AssetClass.FOREX in classes
@@ -344,4 +345,6 @@ async def test_universe_still_returns_all_classes(client):
     r = await client.get("/api/market/universe")
     assert r.status_code == 200
     keys = set(r.json().keys())
-    assert keys == {"crypto", "stocks", "etfs", "forex", "commodities"}
+    assert keys == {
+        "crypto", "stocks", "etfs", "forex", "commodities", "macro", "defi",
+    }
