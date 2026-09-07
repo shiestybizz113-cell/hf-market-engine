@@ -15,7 +15,10 @@ const nav = [
     { to: '/crypto', label: 'Crypto', icon: CandlestickChart },
     { to: '/stocks', label: 'Stocks', icon: CandlestickChart },
     { to: '/etfs', label: 'ETFs', icon: CandlestickChart },
+    { to: '/forex', label: 'Forex', icon: CandlestickChart },
+    { to: '/commodities', label: 'Commodities', icon: CandlestickChart },
     { to: '/macro', label: 'Macro', icon: Activity },
+    { to: '/defi', label: 'DeFi', icon: CandlestickChart },
     { to: '/watchlist', label: 'Watchlist', icon: Eye },
   ]},
   { section: 'Intelligence', items: [

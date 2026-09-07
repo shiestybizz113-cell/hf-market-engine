@@ -58,8 +58,11 @@ export default function Watchlist() {
             <label>Asset Class</label>
             <select value={assetClass} onChange={e => setAssetClass(e.target.value)}>
               <option value="crypto">Crypto</option>
+              <option value="defi">DeFi</option>
               <option value="stock">Stock</option>
               <option value="etf">ETF</option>
+              <option value="forex">Forex</option>
+              <option value="commodity">Commodity</option>
               <option value="macro">Macro</option>
             </select>
           </div>
@@ -105,7 +108,7 @@ export default function Watchlist() {
         )}
       </div>
       <p className="muted mt-8" style={{ fontSize: 11 }}>
-        Prices via CoinGecko (crypto) or demo feed (stocks/ETFs). Research only.
+        Prices via CoinGecko (crypto / DeFi) or demo feed (stocks / ETFs / forex / commodities / macro). Research only.
       </p>
     </div>
   )

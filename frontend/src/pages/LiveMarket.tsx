@@ -21,11 +21,29 @@ const CONFIG: Record<string, { title: string; subtitle: string; symbols: string;
     symbols: 'SPY,QQQ,IWM,GLD,TLT',
     units: '$',
   },
-  macro: {
-    title: 'Macro / Forex',
-    subtitle: 'Dollar index, gold and the 10-year yield as regime inputs.',
-    symbols: 'DXY,XAUUSD,US10Y',
+  forex: {
+    title: 'Forex',
+    subtitle: 'Major FX pairs via TwelveData with demo feed fallback.',
+    symbols: 'EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF',
     units: '',
+  },
+  commodity: {
+    title: 'Commodities',
+    subtitle: 'Gold, silver and crude oil as cross-asset inputs.',
+    symbols: 'XAUUSD,XAGUSD,WTI',
+    units: '$',
+  },
+  macro: {
+    title: 'Macro',
+    subtitle: 'Dollar index, BTC dominance and the 10-year yield as regime inputs.',
+    symbols: 'DXY,BTC_DOM,US10Y,VIX',
+    units: '',
+  },
+  defi: {
+    title: 'DeFi',
+    subtitle: 'Decentralized finance tokens via CoinGecko with demo fallback.',
+    symbols: 'UNI,AAVE,LDO,CRV,MKR,COMP,SUSHI,SNX,PERP,GMX',
+    units: '$',
   },
 }
 
