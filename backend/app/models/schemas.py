@@ -124,6 +124,43 @@ class CorrelationPair(BaseModel):
     status: str
     ai_explanation: str | None = None
     risk_warning: str | None = None
+    source: str = "live"
+    is_simulated: bool = False
+
+
+class RegimeFactor(BaseModel):
+    name: str
+    signal: str
+    detail: str
+
+
+class MarketRegime(BaseModel):
+    regime: str
+    label: str
+    score: float = Field(..., ge=0, le=100)
+    factors: list[RegimeFactor] = []
+    source: str = "demo"
+    is_simulated: bool = True
+    last_updated: datetime | None = None
+
+
+class AlphaScanItem(BaseModel):
+    symbol: str
+    name: str
+    asset_class: AssetClass
+    price: float
+    change_24h: float | None = None
+    momentum_score: float = Field(..., ge=0, le=100)
+    rationale: str
+    source: str = "demo"
+
+
+class AlphaScanResult(BaseModel):
+    generated_at: datetime
+    is_simulated: bool = True
+    anomaly_detection: str = "disabled (demo)"
+    items: list[AlphaScanItem] = []
+    disclaimer: str = "Research only, not financial advice."
 
 
 # ---------- Strategies / Backtest ----------

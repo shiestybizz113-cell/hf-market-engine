@@ -15,6 +15,7 @@ Honesty contract (see settings.MARKET_DATA_MODE):
          live truth.
 """
 
+import hashlib
 import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -378,3 +379,60 @@ class ProviderRegistry:
 
 
 market_providers = ProviderRegistry()
+
+
+# Per-symbol factor betas for the demo price series. Positive beta rides the
+# shared market factor (risk-on), negative beta rides it inversely (risk-off /
+# defensive). Coherent betas give the demo correlation radar plausible signs.
+_DEMO_FACTOR_BETAS: dict[str, float] = {
+    # risk assets (high beta)
+    "BTC": 1.1, "ETH": 1.0, "SOL": 0.9,
+    "COIN": 1.2, "MSTR": 1.3, "NVDA": 1.0, "TSLA": 1.0, "AMD": 1.1,
+    "PLTR": 1.1, "SQ": 1.0, "HOOD": 1.1, "META": 1.0, "AMZN": 0.9,
+    "AAPL": 0.8, "MSFT": 0.8, "GOOGL": 0.9, "NFLX": 0.8,
+    "QQQ": 0.9, "SPY": 0.7, "IWM": 0.7, "ARKK": 1.1, "VTI": 0.7,
+    "EEM": 0.6, "AUDUSD": 0.7, "WTI": 0.6,
+    # moderately positive
+    "EURUSD": 0.5, "GBPUSD": 0.4, "XAUUSD": 0.35, "XAGUSD": 0.6,
+    # defensive / safe havens (inverse beta)
+    "TLT": -0.6, "DXY": -0.7, "VIX": -0.8, "USDJPY": -0.3,
+    "USDCAD": -0.3, "USDCHF": -0.4, "US10Y": 0.2, "BTC_DOM": 0.2,
+}
+
+# Cached deterministic market factor (shared across all symbols). A mild
+# positive drift keeps the demo scenario coherent (risk-on bias): risk assets
+# tend upward while inverse-beta names (TLT/DXY/VIX) drift down, so the regime
+# engine sees a plausible, stable cross-asset picture rather than noise.
+_DEMO_MARKET_FACTOR: dict[int, list[float]] = {}
+
+
+def _demo_market_factor(points: int) -> list[float]:
+    cached = _DEMO_MARKET_FACTOR.get(points)
+    if cached is None:
+        rng = random.Random(int(hashlib.sha256(b"hf-demo-market-factor").hexdigest()[:8], 16))
+        cached = [rng.gauss(0.0009, 0.007) for _ in range(points)]
+        _DEMO_MARKET_FACTOR[points] = cached
+    return cached
+
+
+def demo_price_series(symbol: str, asset_class: AssetClass, points: int = 90) -> list[float]:
+    """Deterministic synthetic price series with plausible cross-asset structure.
+
+    Every symbol loads a shared market factor (fixed, seeded per window
+    length) plus per-symbol idiosyncratic noise. Betas assign sign/direction
+    so inverse relationships (TLT/bonds, DXY, VIX) come out negative against
+    risk assets. Seeded by symbol+class so a given series is stable across
+    calls. Demo/simulated — never presented as live measurement.
+    """
+    meta = universe_for(asset_class).get(symbol) or {"price": 100.0}
+    base = meta["price"]
+    beta = _DEMO_FACTOR_BETAS.get(symbol, 0.5)
+    seed = int(hashlib.sha256(f"{asset_class.value}:{symbol}:series".encode()).hexdigest()[:8], 16)
+    rng = random.Random(seed)
+    factor = _demo_market_factor(points)
+    series: list[float] = []
+    price = base
+    for i in range(points):
+        price = max(price * (1.0 + beta * factor[i] + rng.gauss(0.0, 0.005)), 0.00000001)
+        series.append(round(price, 6 if price < 1 else 2))
+    return series

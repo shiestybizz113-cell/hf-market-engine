@@ -8,8 +8,19 @@ from app.core.market_providers import (
     FOREX_UNIVERSE,
     STOCK_UNIVERSE,
 )
+from app.engines.alpha_scanner import alpha_scanner
+from app.engines.correlation_engine import correlation_engine
+from app.engines.regime_engine import regime_engine
 from app.engines.signal_engine import signal_engine
-from app.models.schemas import AssetClass, CorrelationPair, MarketOverview, PriceQuote, TradeIdea
+from app.models.schemas import (
+    AlphaScanResult,
+    AssetClass,
+    CorrelationPair,
+    MarketOverview,
+    MarketRegime,
+    PriceQuote,
+    TradeIdea,
+)
 from app.services.market_data import market_data_service
 
 router = APIRouter(prefix="/market", tags=["market"])
@@ -60,59 +71,33 @@ async def list_signals(limit: int = 10):
 
 @router.get("/correlations", response_model=list[CorrelationPair])
 async def correlations():
-    """Phase 1 sample correlation radar data."""
-    return [
-        CorrelationPair(
-            pair="BTC / QQQ",
-            asset_a="BTC",
-            asset_b="QQQ",
-            correlation=0.62,
-            relationship_type="Risk asset correlation",
-            status="Diverging",
-            ai_explanation="BTC is holding relative strength while QQQ shows softer momentum, suggesting crypto-specific flows but fragile broader risk appetite.",
-            risk_warning="Watch for reversal if tech weakness spreads into crypto.",
-        ),
-        CorrelationPair(
-            pair="BTC / DXY",
-            asset_a="BTC",
-            asset_b="DXY",
-            correlation=-0.48,
-            relationship_type="Inverse (dollar strength)",
-            status="Aligned",
-            ai_explanation="Dollar firmness continues to act as a headwind for risk assets including crypto.",
-            risk_warning=None,
-        ),
-        CorrelationPair(
-            pair="COIN / BTC",
-            asset_a="COIN",
-            asset_b="BTC",
-            correlation=0.78,
-            relationship_type="Crypto-equity sympathy",
-            status="Aligned",
-            ai_explanation="COIN remains highly sensitive to BTC direction and crypto market sentiment.",
-            risk_warning="High beta — amplified moves in both directions.",
-        ),
-        CorrelationPair(
-            pair="MSTR / BTC",
-            asset_a="MSTR",
-            asset_b="BTC",
-            correlation=0.85,
-            relationship_type="High-beta BTC proxy",
-            status="Aligned",
-            ai_explanation="MSTR continues to trade as a leveraged proxy for Bitcoin exposure.",
-            risk_warning="Elevated volatility relative to spot BTC.",
-        ),
-        CorrelationPair(
-            pair="BTC / Gold",
-            asset_a="BTC",
-            asset_b="XAUUSD",
-            correlation=0.15,
-            relationship_type="Weak / regime-dependent",
-            status="Neutral",
-            ai_explanation="Correlation remains low; both can act as alternative stores of value under different macro regimes.",
-            risk_warning=None,
-        ),
-    ]
+    """Cross-asset correlation radar computed from rolling series.
+
+    Demo mode: deterministic seeded series, labelled simulated. Live mode:
+    real accumulated observations; pairs with too little history are omitted.
+    """
+    return await correlation_engine.scan()
+
+
+@router.get("/regime", response_model=MarketRegime)
+async def regime():
+    """Cross-asset market regime snapshot (SPY/TLT/DXY/BTC/VIX/XAUUSD)."""
+    return await regime_engine.snapshot()
+
+
+@router.get("/alpha", response_model=AlphaScanResult)
+async def alpha(limit: int = Query(20, ge=5, le=100)):
+    """Ranked cross-asset alpha scan. Demo mode: no anomaly detection.
+
+    Anomaly detection is intentionally disabled until a live-data phase.
+    """
+    return await alpha_scanner.scan(limit=limit)
+
+
+@router.get("/ideas/cross-asset", response_model=list[TradeIdea])
+async def cross_asset_ideas(limit: int = Query(5, ge=1, le=10)):
+    """Cross-asset trade ideas derived from regime + correlation engines."""
+    return await signal_engine.generate_cross_asset_ideas(limit=limit)
 
 
 @router.get("/universe")
