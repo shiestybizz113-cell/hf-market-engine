@@ -1,6 +1,8 @@
 import unittest
 
 from app.api.capital import _proposal_evidence
+from app.api.capital import router as capital_router
+from app.core.capital_risk_grid import run_capital_risk_grid, validate_grid
 from app.core.config import Settings
 from app.core.redaction import safe_source_reference
 
@@ -12,6 +14,22 @@ class PublicRedactionTests(unittest.TestCase):
             safe_source_reference(raw),
             "https://example.net/feed/offers",
         )
+
+    def test_root_router_exposes_risk_grid_no_shock_path(self):
+        """The SecDB-style sweep is gated behind the same feature as /capital/run."""
+        paths = {route.path for route in capital_router.routes}
+        self.assertIn("/capital/risk-grid", paths)
+
+    def test_risk_grid_validates_dimensions_are_known(self):
+        with self.assertRaises(ValueError):
+            validate_grid({"halving_breakpoints": {"steps": 3}})
+
+    def test_risk_grid_rejects_blank_spec(self):
+        with self.assertRaises(ValueError):
+            validate_grid({})
+
+    def test_risk_grid_exports_engine_entrypoint(self):
+        self.assertTrue(callable(run_capital_risk_grid))
 
     def test_internal_reference_is_preserved(self):
         self.assertEqual(

@@ -685,3 +685,24 @@ class CapitalOptimizeResult(BaseModel):
     proposals: dict[str, Any]
     disclaimer: str
     receipt_id: str | None = None
+
+
+class CapitalGridAxis(BaseModel):
+    min: float | None = None
+    max: float | None = None
+    steps: int | None = Field(default=None, ge=2)
+
+
+class CapitalRiskGridRequest(BaseModel):
+    run: CapitalRunRequest
+    grid: dict[str, CapitalGridAxis]
+    joint: bool = False
+
+
+class CapitalRiskGridResult(BaseModel):
+    base: dict[str, Any]
+    matrix: dict[str, Any]
+    mode: str
+    disclaimer: str
+    grid_spec: dict[str, Any] | None = None
+    receipt_id: str | None = None

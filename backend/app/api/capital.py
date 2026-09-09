@@ -7,6 +7,8 @@ immutable evidence fact before the calculation is exposed to the user.
 The optimizer PROPOSES only. There is no trade/spend/deploy capability here.
 """
 
+import hashlib
+import json
 import uuid
 from datetime import UTC, datetime
 
@@ -23,10 +25,15 @@ from app.core.capital_allocation import (
 )
 from app.core.capital_evidence import apply_evidence_to_result, prepare_capital_evidence
 from app.core.capital_integrity import apply_energy_storage_integrity
+from app.core.capital_risk_grid import run_capital_risk_grid, validate_grid
 from app.core.capital_scenarios_v2 import run_capital_scenarios_v2
 from app.core.database import get_db
 from app.core.plans import has_feature, require_feature, try_consume_ai_review
-from app.models.schemas import CapitalRunRequest, CapitalScenarioRequest
+from app.models.schemas import (
+    CapitalRiskGridRequest,
+    CapitalRunRequest,
+    CapitalScenarioRequest,
+)
 
 router = APIRouter(prefix="/capital", tags=["capital"])
 
@@ -367,3 +374,80 @@ async def capital_optimize(
         "receipt_id": receipt_id,
         "disclaimer": _DISCLAIMER,
     }
+
+
+@router.post("/risk-grid")
+async def capital_risk_grid(
+    payload: CapitalRiskGridRequest,
+    current_user=Depends(require_feature("capital_allocation")),
+):
+    if payload.run.risk_profile not in RISK_PROFILES:
+        raise HTTPException(status_code=400, detail=f"Unknown risk profile '{payload.run.risk_profile}'")
+
+    try:
+        grid_spec = validate_grid(payload.grid.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    network, btc_price, simulation, prov = await _live_context()
+    base, prepared = await _run_prepared(
+        payload=payload.run, current_user=current_user, network=network,
+        btc_price=btc_price, simulation=simulation, prov=prov,
+    )
+
+    matrix = run_capital_risk_grid(
+        base=base,
+        grid=payload.grid.model_dump(exclude_none=True),
+        owned=prepared["owned"],
+        joint=payload.joint,
+    )
+
+    surface_id = await _persist_capital_receipt(
+        user_id=current_user["_id"], analysis_type="capital_risk_grid_v2",
+        simulation=simulation, result=base, prepared=prepared,
+        extra={
+            "grid_spec": grid_spec,
+            "grid_mode": matrix["mode"],
+            "grid_cell_count": matrix["cell_count"],
+        },
+    )
+
+    await _persist_risk_surface(
+        user_id=current_user["_id"],
+        receipt_id=surface_id,
+        grid_spec=grid_spec,
+        matrix=matrix,
+    )
+
+    return {
+        "base": base,
+        "matrix": matrix,
+        "mode": matrix["mode"],
+        "grid_spec": grid_spec,
+        "receipt_id": surface_id,
+        "disclaimer": _DISCLAIMER,
+    }
+
+
+async def _persist_risk_surface(*, user_id: str, receipt_id: str, grid_spec: list[dict], matrix: dict) -> str:
+    """Persist a risk-grid surface as a derived data series (VISION moat #3).
+
+    Each sweep is stored keyed by (user, dimension spec) so identical sweeps
+    compound into a proprietary break-even / profitability history instead of
+    being thrown away after the response leaves the browser.
+    """
+    db = get_db()
+    signature = hashlib.sha256(json.dumps(grid_spec, sort_keys=True).encode()).hexdigest()[:16]
+    doc_id = f"{user_id}:{signature}:{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+    await db.capital_risk_surfaces.insert_one({
+        "_id": doc_id,
+        "user_id": user_id,
+        "receipt_id": receipt_id,
+        "signature": signature,
+        "grid_spec": grid_spec,
+        "mode": matrix["mode"],
+        "cell_count": matrix["cell_count"],
+        "breakeven": matrix.get("breakeven", {}),
+        "observed_at": datetime.now(UTC),
+    })
+    return doc_id
