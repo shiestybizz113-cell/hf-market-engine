@@ -15,7 +15,7 @@ PROD_BASE = dict(
     ENVIRONMENT="production",
     SECRET_KEY="x" * 40,
     MONGODB_URL="mongodb://appuser:pass@mongo:27017",
-    CORS_ORIGINS="https://app.example.com",
+    CORS_ORIGINS="https://app.hfmarket.io",
     ARCHISYNAPSE_SIGNING_KEY="a" * 64,
 )
 

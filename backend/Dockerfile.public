@@ -1,0 +1,25 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# Install the exact public runtime dependency set, including shared Redis scale
+# controls. Keep dependency installation in its own layer for build caching.
+COPY requirements.txt requirements-public.txt ./
+RUN python -m pip install --upgrade pip \
+    && python -m pip install -r requirements-public.txt
+
+COPY app ./app
+
+# Public runtime does not need root privileges.
+RUN groupadd --system app \
+    && useradd --system --gid app --home-dir /app app \
+    && chown -R app:app /app
+USER app
+
+EXPOSE 8000
+
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${APP_WORKERS:-2}"]

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getOverview, getMovers, getSignals, getCorrelations } from '../services/api'
+import EvidenceStamp from '../components/EvidenceStamp'
 
 export default function Dashboard() {
   const [overview, setOverview] = useState<any>(null)
@@ -26,7 +27,7 @@ export default function Dashboard() {
 
   if (loading) return (
     <div className="muted" style={{ padding: 40, textAlign: 'center' }}>
-      <span className="live-dot" /> Loading market data…
+      Loading market data…
     </div>
   )
 
@@ -35,21 +36,25 @@ export default function Dashboard() {
       {/* Market Overview */}
       <div className="panel col-12">
         <div className="panel-header">
-          <span className="panel-title"><span className="live-dot" />Market Overview</span>
+          <span className="panel-title">Market Overview</span>
           <span className="badge badge-amber">
             {overview?.regime?.replace(/-/g, ' ') || '—'} ({overview?.regime_confidence?.toFixed(0) || '—'}%)
           </span>
         </div>
-        <div className="flex gap-12" style={{ flexWrap: 'wrap' }}>
-          <div>
-            <div className="muted" style={{ fontSize: 11 }}>BTC</div>
-            <div className="mono" style={{ fontSize: 18 }}>${fmt(overview?.btc?.price)}</div>
-            <div>{pct(overview?.btc?.change_24h)}</div>
+        <div className="flex gap-12" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div style={{ minWidth: 220 }}>
+            <div className="hero-label">BTC / USD</div>
+            <div className="hero-readout"><span className="hero-unit">$</span>{fmt(overview?.btc?.price)}</div>
+            <div className="flex gap-8" style={{ marginTop: 6 }}>
+              {pct(overview?.btc?.change_24h)}
+              <EvidenceStamp source={overview?.btc?.source} provider={overview?.btc?.provider} observedAt={overview?.btc?.observed_at} />
+            </div>
           </div>
-          <div>
+          <div style={{ borderLeft: '1px solid var(--border)', paddingLeft: 20, marginLeft: 4 }}>
             <div className="muted" style={{ fontSize: 11 }}>ETH</div>
             <div className="mono" style={{ fontSize: 18 }}>${fmt(overview?.eth?.price)}</div>
             <div>{pct(overview?.eth?.change_24h)}</div>
+            <EvidenceStamp source={overview?.eth?.source} provider={overview?.eth?.provider} observedAt={overview?.eth?.observed_at} />
           </div>
           <div>
             <div className="muted" style={{ fontSize: 11 }}>Market Cap</div>
@@ -130,7 +135,7 @@ export default function Dashboard() {
       {/* AI Signals */}
       <div className="panel col-12">
         <div className="panel-header">
-          <span className="panel-title"><span className="live-dot" />AI Signal Engine</span>
+          <span className="panel-title">AI Signal Engine</span>
           <span className="badge badge-blue">Research Only</span>
         </div>
         <div className="grid-12">

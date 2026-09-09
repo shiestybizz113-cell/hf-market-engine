@@ -6,7 +6,7 @@ import {
   Brain, BookOpen, BarChart3, CreditCard, Activity, Settings, Target,
   LogOut, Search, Landmark
 } from 'lucide-react'
-import { getOverview } from '../services/api'
+import { getHealth, getOverview } from '../services/api'
 import DataModeBanner from './DataModeBanner'
 
 const nav = [
@@ -45,11 +45,14 @@ const nav = [
   ]},
 ]
 
+type SystemState = 'unknown' | 'operational' | 'degraded' | 'offline'
+
 export default function Layout() {
   const navigate = useNavigate()
   const [regime, setRegime] = useState<string>('mixed')
   const [confidence, setConfidence] = useState<number | null>(null)
   const [query, setQuery] = useState('')
+  const [systemState, setSystemState] = useState<SystemState>('unknown')
 
   useEffect(() => {
     getOverview()
@@ -58,6 +61,13 @@ export default function Layout() {
         setConfidence(r.data?.regime_confidence ?? null)
       })
       .catch(() => {})
+
+    getHealth()
+      .then(r => {
+        const status = r.data?.status
+        setSystemState(status === 'operational' ? 'operational' : status === 'degraded' ? 'degraded' : 'unknown')
+      })
+      .catch(() => setSystemState('offline'))
   }, [])
 
   const onSearch = (e: React.FormEvent) => {
@@ -72,6 +82,22 @@ export default function Layout() {
     localStorage.removeItem('token')
     navigate('/login')
   }
+
+  const statusLabel = systemState === 'operational'
+    ? 'System operational'
+    : systemState === 'degraded'
+      ? 'System degraded'
+      : systemState === 'offline'
+        ? 'System offline'
+        : 'System status unknown'
+
+  const statusBadge = systemState === 'operational'
+    ? 'badge-green'
+    : systemState === 'degraded'
+      ? 'badge-amber'
+      : systemState === 'offline'
+        ? 'badge-red'
+        : 'badge-neutral'
 
   return (
     <div className="app-shell">
@@ -119,7 +145,9 @@ export default function Layout() {
             </span>
           </div>
           <div className="flex gap-8" style={{ alignItems: 'center' }}>
-            <span className="badge badge-green">System OK</span>
+            <span className={`badge ${statusBadge}`} title="Derived from /api/system/health">
+              {statusLabel}
+            </span>
             <button className="btn btn-primary btn-sm" onClick={() => navigate('/pricing')}>
               Upgrade
             </button>

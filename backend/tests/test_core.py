@@ -37,8 +37,8 @@ async def test_api_health(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_system_health_shape(client: AsyncClient):
-    r = await client.get("/api/system/health")
+async def test_system_health_shape(auth_client: AsyncClient):
+    r = await auth_client.get("/api/system/health")
     assert r.status_code == 200
     body = r.json()
     # Required fields
@@ -51,12 +51,12 @@ async def test_system_health_shape(client: AsyncClient):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.asyncio
-async def test_market_data_mode_is_demo(client: AsyncClient):
+async def test_market_data_mode_is_demo(auth_client: AsyncClient):
     """
     VISION.md: "MARKET_DATA_MODE=demo labels everything simulation."
     System health must report demo mode in test environment.
     """
-    r = await client.get("/api/system/health")
+    r = await auth_client.get("/api/system/health")
     assert r.status_code == 200
     assert r.json()["market_data_mode"] == "demo"
 

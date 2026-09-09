@@ -35,8 +35,34 @@ from app.core.database import get_db
 from app.core.evidence_broker import capture_observation
 from app.core.gpu import GPU_CATALOG
 from app.core.mining import ASIC_CATALOG
+from app.core.redaction import safe_source_reference
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
+
+
+def _public_fact(doc: dict) -> dict:
+    out = dict(doc)
+    out.pop("_id", None)
+    out["source_reference"] = safe_source_reference(out.get("source_reference"))
+    out["fresh"] = not E.is_stale(out)
+    out["age_seconds"] = round(E.age_seconds(out), 1)
+    return out
+
+
+def _public_snapshot(doc: dict) -> dict:
+    """Proof metadata only — never expose the raw vendor/provider payload."""
+    return {
+        "id": doc.get("snapshot_id") or doc.get("_id"),
+        "snapshot_id": doc.get("snapshot_id") or doc.get("_id"),
+        "domain": doc.get("domain"),
+        "provider": doc.get("provider"),
+        "source_reference": safe_source_reference(doc.get("source_reference")),
+        "observed_at": doc.get("observed_at"),
+        "ingested_at": doc.get("ingested_at"),
+        "sha256": doc.get("sha256"),
+        "raw_bytes": doc.get("raw_bytes"),
+        "payload_truncated": doc.get("payload_truncated", False),
+    }
 
 
 @router.get("/receipts")
@@ -245,3 +271,12 @@ async def seed_reference_facts(
             seeded.append({"domain": "gpu", "metric": metric, "subject": key, "fact_id": eid})
 
     return {"ok": True, "seeded": len(seeded), "facts": seeded}
+
+
+def _public_fact(doc: dict) -> dict:
+    """Redact and annotate a fact for public API response."""
+    out = dict(doc)
+    out.pop("_id", None)
+    out["fresh"] = not E.is_stale(out) if hasattr(E, "is_stale") else True
+    out["age_seconds"] = round(E.age_seconds(out), 1) if hasattr(E, "age_seconds") else 0
+    return out
