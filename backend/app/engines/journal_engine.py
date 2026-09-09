@@ -2,11 +2,11 @@
 Trade Journal Engine — auto-entry from paper trades & execution sims.
 """
 
-from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any
-from app.core.database import get_db
-from app.core import ai
 import uuid
+from datetime import UTC, datetime
+
+from app.core import ai
+from app.core.database import get_db
 
 
 class JournalEngine:
@@ -17,22 +17,22 @@ class JournalEngine:
         asset: str,
         direction: str,
         entry_price: float,
-        exit_price: Optional[float] = None,
+        exit_price: float | None = None,
         quantity: float = 0,
-        pnl: Optional[float] = None,
-        strategy_id: Optional[str] = None,
+        pnl: float | None = None,
+        strategy_id: str | None = None,
         source: str = "manual",  # manual | paper_trade | execution_sim
-        source_id: Optional[str] = None,
-        notes: Optional[str] = None,
-        emotion: Optional[str] = None,
-        mistake_tag: Optional[str] = None,
-        ai_review: Optional[str] = None,
+        source_id: str | None = None,
+        notes: str | None = None,
+        emotion: str | None = None,
+        mistake_tag: str | None = None,
+        ai_review: str | None = None,
     ) -> dict:
         db = get_db()
         entry = {
             "_id": str(uuid.uuid4()),
             "user_id": user_id,
-            "trade_date": datetime.now(timezone.utc),
+            "trade_date": datetime.now(UTC),
             "asset": asset.upper(),
             "direction": direction,
             "entry_price": entry_price,
@@ -49,12 +49,12 @@ class JournalEngine:
                 user_id, direction, pnl, source, notes, asset
             ),
             "lesson": None,
-            "created_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(UTC),
         }
         await db.journal.insert_one(entry)
         return entry
 
-    async def list_entries(self, user_id: str, limit: int = 50) -> List[dict]:
+    async def list_entries(self, user_id: str, limit: int = 50) -> list[dict]:
         db = get_db()
         cursor = db.journal.find({"user_id": user_id}).sort("trade_date", -1).limit(limit)
         return [doc async for doc in cursor]
@@ -103,9 +103,9 @@ class JournalEngine:
         self,
         user_id: str,
         direction: str,
-        pnl: Optional[float],
+        pnl: float | None,
         source: str,
-        notes: Optional[str],
+        notes: str | None,
         asset: str,
     ) -> str:
         return await ai.journal_review_for(

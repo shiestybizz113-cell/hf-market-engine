@@ -5,16 +5,14 @@ Phase 1 uses rule-based + template generation.
 Architecture ready for LLM injection (Grok / OpenAI).
 """
 
-from datetime import datetime, timezone
-from typing import List
-from app.models.schemas import (
-    TradeIdea, SignalDirection, SignalType, AssetClass, RiskLevel
-)
-from app.services.market_data import market_data_service
-from app.core import ai
 import random
 import uuid
 
+from app.core import ai
+from app.engines.correlation_engine import correlation_engine
+from app.engines.regime_engine import regime_engine
+from app.models.schemas import AssetClass, SignalDirection, SignalType, TradeIdea
+from app.services.market_data import market_data_service
 
 SAMPLE_THESES = {
     SignalType.MOMENTUM_BREAKOUT: [
@@ -41,7 +39,7 @@ SAMPLE_THESES = {
 
 
 class SignalEngine:
-    async def generate_sample_signals(self, limit: int = 8) -> List[TradeIdea]:
+    async def generate_sample_signals(self, limit: int = 8) -> list[TradeIdea]:
         """Generate realistic sample Trade Ideas across asset classes for Phase 1."""
         ideas = []
 
@@ -104,6 +102,85 @@ class SignalEngine:
                 supporting_indicators=["Relative strength", "Volume", "Correlation"],
             ))
 
+        return ideas[:limit]
+
+    async def generate_cross_asset_ideas(self, limit: int = 5) -> list[TradeIdea]:
+        """Cross-asset ideas derived from the regime + correlation engines."""
+        regime = await regime_engine.snapshot()
+        pairs = await correlation_engine.scan(points=60)
+        by_pair = {p.pair: p for p in pairs}
+
+        def _pair_corr(a: str, b: str) -> float | None:
+            p = by_pair.get(f"{a} / {b}") or by_pair.get(f"{b} / {a}")
+            return p.correlation if p else None
+
+        ideas: list[TradeIdea] = []
+        regime = regime.regime if regime else "mixed"
+
+        if regime in ("risk_off",):
+            ideas.append(TradeIdea(
+                id=str(uuid.uuid4()),
+                asset="TLT",
+                asset_class=AssetClass.ETF,
+                direction=SignalDirection.BULLISH,
+                thesis=(
+                    "Cross-asset regime is risk-off (equities weak, bonds bid, "
+                    "elevated vol). Long-bond duration typically benefits."
+                ),
+                signal_type=SignalType.RISK_OFF_WARNING,
+                confidence=round(random.uniform(60, 74), 1),
+                time_horizon="1–5 days",
+                correlation_context="TLT/SPY correlation flips defensive in risk-off regimes.",
+                macro_context=f"Regime engine: {regime}.",
+                risk_score=round(random.uniform(45, 70), 1),
+                invalidation="Equity relief rally without bond sell-off.",
+                paper_trade_setup="Long duration via simulated TLT position.",
+                supporting_indicators=["Cross-asset regime", "TLT/SPY correlation"],
+            ))
+        if regime in ("crypto_bull", "risk_on"):
+            btc_qqq = _pair_corr("BTC", "QQQ")
+            if btc_qqq is not None and btc_qqq > 0.5:
+                ideas.append(TradeIdea(
+                    id=str(uuid.uuid4()),
+                    asset="BTC",
+                    asset_class=AssetClass.CRYPTO,
+                    direction=SignalDirection.BULLISH,
+                    thesis=(
+                        f"Positive crypto regime with BTC/QQQ correlation at "
+                        f"{btc_qqq:+.2f} — crypto leading risk appetite."
+                    ),
+                    signal_type=SignalType.CRYPTO_STOCK_SYMPATHY,
+                    confidence=round(random.uniform(58, 76), 1),
+                    time_horizon="4h–24h",
+                    correlation_context="BTC/QQQ co-movement constructive for risk assets.",
+                    macro_context=f"Regime engine: {regime}.",
+                    risk_score=round(random.uniform(55, 80), 1),
+                    invalidation="QQQ rolls over while BTC diverges higher.",
+                    paper_trade_setup="Simulated long crypto exposure.",
+                    supporting_indicators=["Cross-asset regime", "BTC/QQQ correlation"],
+                ))
+
+        gold_dxy = _pair_corr("DXY", "XAUUSD")
+        if gold_dxy is not None and gold_dxy < -0.3:
+            ideas.append(TradeIdea(
+                id=str(uuid.uuid4()),
+                asset="XAUUSD",
+                asset_class=AssetClass.COMMODITY,
+                direction=SignalDirection.BULLISH,
+                thesis=(
+                    f"Dollar/gold inverse relationship running at {gold_dxy:+.2f} "
+                    "— gold tends to appreciate as the dollar softens."
+                ),
+                signal_type=SignalType.CORRELATION_DIVERGENCE,
+                confidence=round(random.uniform(52, 68), 1),
+                time_horizon="1–3 days",
+                correlation_context="Inverse USD/gold beta is the anchor.",
+                macro_context=f"Regime engine: {regime}.",
+                risk_score=round(random.uniform(40, 70), 1),
+                invalidation="Dollar strength with gold failing to rally.",
+                paper_trade_setup="Simulated long gold exposure.",
+                supporting_indicators=["DXY direction", "Gold/dollar correlation"],
+            ))
         return ideas[:limit]
 
     async def generate_trade_idea(self, asset: str, asset_class: AssetClass) -> TradeIdea:

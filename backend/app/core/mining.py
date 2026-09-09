@@ -24,13 +24,11 @@ Read-only economics + fleet intelligence only. No browser mining, no hidden
 mining, no custody of rewards.
 """
 
-import httpx
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
-from app.core.config import settings
+import httpx
 
 BLOCKCHAIN_INFO_URL = "https://api.blockchain.info"
 PROVIDER_TIMEOUT = 8.0
@@ -67,14 +65,14 @@ class NetworkData:
 
 class NetworkProvider(ABC):
     @abstractmethod
-    async def fetch(self) -> Optional[NetworkData]:
+    async def fetch(self) -> NetworkData | None:
         """Return live network data or None when unavailable. Never raises."""
 
 
 class BlockchainInfoProvider(NetworkProvider):
     provider_id = "blockchain.info"
 
-    async def fetch(self) -> Optional[NetworkData]:
+    async def fetch(self) -> NetworkData | None:
         try:
             async with httpx.AsyncClient(timeout=PROVIDER_TIMEOUT) as client:
                 hr, diff = await client.get(f"{BLOCKCHAIN_INFO_URL}/q/hashrate"), \
@@ -88,7 +86,7 @@ class BlockchainInfoProvider(NetworkProvider):
                 return NetworkData(
                     provider=self.provider_id,
                     source="live",
-                    observed_at=datetime.now(timezone.utc),
+                    observed_at=datetime.now(UTC),
                     hashrate_ths=hashrate_ghs / 1000.0,
                     difficulty=difficulty,
                 )
@@ -99,11 +97,11 @@ class BlockchainInfoProvider(NetworkProvider):
 class DemoNetworkProvider(NetworkProvider):
     provider_id = "demo"
 
-    async def fetch(self) -> Optional[NetworkData]:
+    async def fetch(self) -> NetworkData | None:
         return NetworkData(
             provider="demo",
             source="demo",
-            observed_at=datetime.now(timezone.utc),
+            observed_at=datetime.now(UTC),
             hashrate_ths=800_000_000,  # ~800 EH/s
             difficulty=110_000_000_000_000.0,  # ~110T
         )
@@ -112,7 +110,7 @@ class DemoNetworkProvider(NetworkProvider):
 # ---------- ASIC catalog ----------
 # Realistic reference hardware. Prices are indicative street prices and are
 # treated as user-editable inputs, not live quotes.
-ASIC_CATALOG: Dict[str, dict] = {
+ASIC_CATALOG: dict[str, dict] = {
     "S21 Pro": {"model": "Antminer S21 Pro", "hashrate_ths": 234.0, "power_watts": 3510.0, "price_usd": 3500.0, "class": "professional"},
     "S21": {"model": "Antminer S21", "hashrate_ths": 200.0, "power_watts": 3500.0, "price_usd": 2800.0, "class": "professional"},
     "S19k Pro": {"model": "Antminer S19k Pro", "hashrate_ths": 136.0, "power_watts": 3310.0, "price_usd": 2200.0, "class": "professional"},
@@ -125,7 +123,7 @@ ASIC_CATALOG: Dict[str, dict] = {
 }
 
 
-def asic_for(model: str) -> Optional[dict]:
+def asic_for(model: str) -> dict | None:
     return ASIC_CATALOG.get(model) or next(
         (v for v in ASIC_CATALOG.values() if v["model"].lower() == model.lower()), None
     )
@@ -153,7 +151,7 @@ def compute_estimate(
     btc_price: float,
     hardware_cost_usd: float,
     network: NetworkData,
-) -> Dict:
+) -> dict:
     uptime = max(0.0, min(100.0, uptime_pct))
     daily_btc = estimate_daily_btc(hashrate_ths, network, uptime, pool_fee_pct)
     revenue_day = daily_btc * btc_price
@@ -187,10 +185,10 @@ def compute_estimate(
 
 
 def scenario_table(
-    base: Dict,
+    base: dict,
     btc_price: float,
-    price_shifts_pct: List[float],
-    difficulty_shifts_pct: List[float],
+    price_shifts_pct: list[float],
+    difficulty_shifts_pct: list[float],
     difficulty: float,
     hashrate_ths: float,
     uptime_pct: float,
@@ -198,7 +196,7 @@ def scenario_table(
     electricity_usd_kwh: float,
     power_watts: float,
     hardware_cost_usd: float,
-) -> List[Dict]:
+) -> list[dict]:
     rows = []
     for dpct in difficulty_shifts_pct:
         d = difficulty * (1 + dpct / 100.0)
@@ -240,7 +238,7 @@ def scenario_table(
 def mine_vs_buy(
     *,
     capital_usd: float,
-    asic: Dict,
+    asic: dict,
     btc_price: float,
     electricity_usd_kwh: float,
     pool_fee_pct: float,
@@ -253,7 +251,7 @@ def mine_vs_buy(
     hosting_cost_usd_per_unit_month: float = 0.0,
     maintenance_cost_usd_per_unit_month: float = 0.0,
     hardware_resale_value_usd_per_unit: float = 0.0,
-) -> Dict:
+) -> dict:
     """Compare buying BTC outright vs. mining it, reconciled against the SAME
     starting dollars.
 
@@ -401,7 +399,7 @@ def mine_vs_buy(
     }
 
 
-def network_data_dict(network: NetworkData) -> Dict:
+def network_data_dict(network: NetworkData) -> dict:
     return {
         "provider": network.provider,
         "source": network.source,
@@ -425,7 +423,7 @@ def fleet_estimate(
     uptime_pct: float,
     btc_price: float,
     network: NetworkData,
-) -> Dict:
+) -> dict:
     per_unit = compute_estimate(
         hashrate_ths=hashrate_ths,
         power_watts=power_watts,

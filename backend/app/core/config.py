@@ -1,6 +1,7 @@
-from pydantic_settings import BaseSettings
-from pydantic import model_validator
 from functools import lru_cache
+
+from pydantic import model_validator
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -27,6 +28,20 @@ class Settings(BaseSettings):
     # demo -> labeled demo only; live -> real providers only, missing stays missing.
     MARKET_DATA_MODE: str = "demo"
 
+# Execution impact model:
+    #   "sqrt_law_v1" -> deterministic square-root law (default, honest)
+    #   "none"        -> impact fields are null, no fabricated numbers
+    #   "legacy_random" -> old random.uniform() behavior (debugging only)
+    IMPACT_MODEL: str = "sqrt_law_v1"
+
+    # Archisynapse v1.1 — Ed25519 receipt signing key (hex).
+    # Empty in dev = ephemeral key (receipts unverifiable across restarts).
+    # REQUIRED in production: receipts without a stable key are worthless
+    # as evidence, since the public key changes on every deploy.
+    # Generate with:
+    #   python -c "from app.core.archisynapse.crypto import generate_signing_key_hex; print(generate_signing_key_hex())"
+    ARCHISYNAPSE_SIGNING_KEY: str = ""
+
     # Capital V2 infrastructure feeds. These are canonical JSON feed endpoints;
     # no feed configured means the corresponding lane remains reference/user
     # assumption data rather than fake live data.
@@ -47,6 +62,22 @@ class Settings(BaseSettings):
     AI_TEMPERATURE: float = 0.4
     AI_TIMEOUT: float = 20.0
     AI_CACHE_TTL: int = 900
+
+    # ── AI spend enforcement (HARNESS.md §4 kill conditions) ──────────────
+    # Hard caps on estimated AI token spend. When a cap is hit, further AI
+    # calls return the rule-based fallback instead of billing an API call.
+    # This is enforcement, not observability: the loop actually stops.
+    # Set to 0.0 to disable a specific cap (not recommended in production).
+    AI_BUDGET_USER_DAILY_USD: float = 2.00      # per user, rolling 24h
+    AI_BUDGET_GLOBAL_DAILY_USD: float = 50.00   # all users, rolling 24h
+    AI_BUDGET_ENFORCE: bool = True              # False = log only, do not block
+
+    # ── Alerting (HARNESS.md §5) ──────────────────────────────────────────
+    # Webhook fired on governance events: budget exceeded, receipt write
+    # failure, signature verification failure. Slack-compatible payload.
+    # Empty = log-only (still recorded, just not pushed anywhere).
+    ALERT_WEBHOOK_URL: str = ""
+    ALERT_MIN_INTERVAL_SECONDS: int = 300  # dedupe window per alert type
 
     REDIS_URL: str = "redis://localhost:6379"
 
@@ -104,6 +135,19 @@ class Settings(BaseSettings):
             raise ValueError("CORS_ORIGINS must be set to your real origin(s) in production")
         if "*" in self.cors_origin_list:
             raise ValueError("CORS_ORIGINS may not contain '*' in production")
+        if not self.ARCHISYNAPSE_SIGNING_KEY:
+            raise ValueError(
+                "ARCHISYNAPSE_SIGNING_KEY must be set in production. Without a "
+                "stable signing key, receipts are signed with an ephemeral key "
+                "that changes on every restart, making historical receipts "
+                "unverifiable. No receipt = no evidence."
+            )
+        if len(self.ARCHISYNAPSE_SIGNING_KEY) != 64:
+            raise ValueError(
+                "ARCHISYNAPSE_SIGNING_KEY must be a 64-character hex string "
+                "(32-byte Ed25519 private key)."
+            )
+
         if any("example.com" in origin.lower() for origin in self.cors_origin_list):
             raise ValueError("CORS_ORIGINS still contains an example.com placeholder")
 
@@ -117,12 +161,25 @@ class Settings(BaseSettings):
             raise ValueError("MARKET_DATA_MODE must be 'demo' or 'live'")
         return self
 
+    @model_validator(mode="after")
+    def _validate_impact_model(self) -> "Settings":
+        valid = {"sqrt_law_v1", "none", "legacy_random"}
+        if self.IMPACT_MODEL not in valid:
+            raise ValueError(f"IMPACT_MODEL must be one of {valid}, got '{self.IMPACT_MODEL}'")
+        if self.ENVIRONMENT.lower() == "production" and self.IMPACT_MODEL == "legacy_random":
+            raise ValueError(
+                "IMPACT_MODEL=legacy_random is not allowed in production. "
+                "It reports fabricated random figures as execution costs. "
+                "Use 'sqrt_law_v1' or 'none' instead."
+            )
+        return self
+
     class Config:
         env_file = ".env"
         case_sensitive = True
 
 
-@lru_cache()
+@lru_cache
 def get_settings() -> Settings:
     return Settings()
 

@@ -24,16 +24,15 @@ its observed vs assumed inputs for the evidence receipt.
 Locked rule: no "ROI". Operating flow and capital basis only.
 """
 
-from typing import Dict, List
 
-from app.core.mining import NetworkData, compute_estimate, network_data_dict
 from app.core.gpu import gpu_economics, resolve_gpu
+from app.core.mining import NetworkData, compute_estimate, network_data_dict
 
 DAYS_PER_MONTH = 30.0
 KW_PER_MW = 1000.0
 
 
-def _mine_risk_flags(est: Dict, electricity_usd_kwh: float) -> List[str]:
+def _mine_risk_flags(est: dict, electricity_usd_kwh: float) -> list[str]:
     flags = []
     profit = est.get("operating_profit_day")
     be = est.get("break_even_electricity_usd_kwh")
@@ -49,7 +48,7 @@ def _mine_risk_flags(est: Dict, electricity_usd_kwh: float) -> List[str]:
     return flags
 
 
-def _mine_units(capital_usd: float, available_mw: float, asic: Dict) -> int:
+def _mine_units(capital_usd: float, available_mw: float, asic: dict) -> int:
     if asic["price_usd"] <= 0:
         return 0
     by_capital = int(capital_usd // asic["price_usd"])
@@ -64,7 +63,7 @@ def allocate(
     *,
     capital_usd: float,
     available_mw: float,
-    asic: Dict,
+    asic: dict,
     btc_price: float,
     network: NetworkData,
     electricity_usd_kwh: float,
@@ -80,8 +79,8 @@ def allocate(
     gpu_utilization_pct: float = 85.0,
     gpu_uptime_pct: float = 100.0,
     gpu_units_cap: int = 256,
-) -> List[Dict]:
-    options: List[Dict] = []
+) -> list[dict]:
+    options: list[dict] = []
 
     # 1) Buy BTC outright
     btc_bought = capital_usd / btc_price if btc_price > 0 else 0.0
@@ -255,7 +254,7 @@ def gpu_lanes(
     gpu_utilization_pct: float,
     gpu_uptime_pct: float,
     gpu_units_cap: int,
-) -> List[Dict]:
+) -> list[dict]:
     """Build the build_gpus + cloud_gpus option dicts.
 
     Same shape as other allocation options plus a per_unit economics dict (the
@@ -286,7 +285,7 @@ def gpu_lanes(
         "gpu_uptime_pct": gpu_uptime_pct,
         "gpu_units_cap": gpu_units_cap,
     }
-    lanes: List[Dict] = []
+    lanes: list[dict] = []
 
     if not gpu_active:
         lanes.append({
@@ -431,14 +430,14 @@ def gpu_lanes(
     return lanes
 
 
-def rank_options(options: List[Dict]) -> List[str]:
+def rank_options(options: list[dict]) -> list[str]:
     """Rank available options by monthly operating flow per capital deployed.
 
     Zero-capital options (curtail, hold cash) are ranked on absolute monthly
     flow. The basis is explicit: this is capital efficiency on operating flow,
     not a risk-adjusted or total-return ranking.
     """
-    def eff(o: Dict) -> float:
+    def eff(o: dict) -> float:
         if not o["available"]:
             return float("-inf")
         if o["capital_deployed"] > 0:

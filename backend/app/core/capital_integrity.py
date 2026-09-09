@@ -4,13 +4,12 @@ These functions repair legacy lane calculations while keeping the original
 engine API stable. They are deterministic and applied to base + scenario runs.
 """
 
-from typing import Dict
 
 DAYS_PER_MONTH = 30.0
 KWH_PER_MWH = 1000.0
 
 
-def apply_energy_storage_integrity(result: Dict) -> Dict:
+def apply_energy_storage_integrity(result: dict) -> dict:
     """Correct energy/storage units, capital basis, and payback semantics.
 
     Legacy energy_lane had three issues:
@@ -63,7 +62,6 @@ def apply_energy_storage_integrity(result: Dict) -> Dict:
     storage_profit_day = storage_revenue_day - storage_cost_day
 
     revenue_day = direct_revenue_day + storage_revenue_day
-    cost_day = direct_cost_day + storage_cost_day
     profit_day = direct_profit_day + storage_profit_day
     revenue_month = revenue_day * DAYS_PER_MONTH
     profit_month = profit_day * DAYS_PER_MONTH

@@ -14,10 +14,11 @@ exact state that produced it. AI analyzes and recommends; it never executes.
 """
 
 import time
-import uuid
-import httpx
-from typing import Dict, Optional, Tuple
 
+import httpx
+
+from app.core import alerting, budget
+from app.core.archisynapse import build_receipt, persist_receipt
 from app.core.config import settings
 from app.core.database import get_db
 
@@ -38,7 +39,7 @@ _MODEL_RATES = {
 _DEFAULT_RATES = (0.30, 1.00)
 
 
-def provider() -> Tuple[str, str, str]:
+def provider() -> tuple[str, str, str]:
     """Resolve (provider, base_url, api_key). Empty key means template mode."""
     if settings.GROK_API_KEY:
         return "grok", _GROK_URL, settings.GROK_API_KEY
@@ -54,7 +55,7 @@ def default_model(provider_name: str) -> str:
     }.get(provider_name, "gpt-4o-mini")
 
 
-def provider_info() -> Dict:
+def provider_info() -> dict:
     name, _, _ = provider()
     return {
         "provider": name,
@@ -63,7 +64,7 @@ def provider_info() -> Dict:
     }
 
 
-async def _chat(system: str, user: str, max_tokens: int) -> Optional[str]:
+async def _chat(system: str, user: str, max_tokens: int) -> str | None:
     name, url, key = provider()
     if not key:
         return None
@@ -93,7 +94,7 @@ async def _chat(system: str, user: str, max_tokens: int) -> Optional[str]:
         return None
 
 
-# ---------- Evidence receipts ----------
+# ---------- Evidence receipts (Archisynapse v1.1) ----------
 
 def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
@@ -113,42 +114,56 @@ async def _persist_receipt(
     model: str,
     provider_name: str,
     fallback_used: bool,
-    user_id: Optional[str] = None,
-    extra: Optional[Dict] = None,
+    user_id: str | None = None,
+    extra: dict | None = None,
+    simulation: bool = False,
 ) -> None:
-    """Persist an analysis receipt best-effort. Never raises."""
+    """
+    Build a cryptographically signed Archisynapse v1.1 receipt and persist it.
+    Never raises — DB failures are logged, receipt_persisted flagged False.
+    """
     try:
         db = get_db()
         if db is None:
             return
-        in_tokens = _estimate_tokens(system) + _estimate_tokens(user)
-        out_tokens = _estimate_tokens(output)
-        receipt = {
-            "_id": str(uuid.uuid4()),
-            "job": job,
-            "user_id": user_id,
-            "system_prompt": system,
-            "user_prompt": user,
-            "output": output,
-            "model": model,
-            "provider": provider_name,
-            "fallback_used": fallback_used,
-            "tokens_estimate": {"input": in_tokens, "output": out_tokens},
-            "estimated_cost_usd": round(_estimate_cost(model, in_tokens, out_tokens), 6),
-            "generated_at": time.time(),
-        }
-        if extra:
-            receipt["extra"] = extra
-        await db["analysis_receipts"].insert_one(receipt)
+
+        receipt = build_receipt(
+            job=job,
+            system_prompt=system,
+            user_prompt=user,
+            output=output,
+            model=model,
+            provider_name=provider_name,
+            fallback_used=fallback_used,
+            simulation=simulation,
+            user_id=user_id,
+            extra=extra,
+        )
+
+        receipt_id, persisted = await persist_receipt(receipt, db)
+
+        if not persisted:
+            # HARNESS.md §5: receipt_persisted: false must not pass silently.
+            await alerting.fire(
+                alerting.RECEIPT_WRITE_FAILED,
+                f"Signed receipt could not be persisted for job '{job}'.",
+                context={
+                    "job": job,
+                    "user_id": user_id or "system",
+                    "receipt_id": receipt_id,
+                    "provider": provider_name,
+                    "model": model,
+                },
+            )
     except Exception:
         return
 
 
 # In-process TTL cache: {key: (expires_at, text)}
-_cache: Dict[str, Tuple[float, str]] = {}
+_cache: dict[str, tuple[float, str]] = {}
 
 
-def _cache_get(key: str) -> Optional[str]:
+def _cache_get(key: str) -> str | None:
     entry = _cache.get(key)
     if not entry:
         return None
@@ -183,11 +198,11 @@ async def generate(
     user: str,
     fallback: str,
     *,
-    cache_key: Optional[str] = None,
-    job: Optional[str] = None,
-    user_id: Optional[str] = None,
+    cache_key: str | None = None,
+    job: str | None = None,
+    user_id: str | None = None,
     simulation: bool = False,
-    extra: Optional[Dict] = None,
+    extra: dict | None = None,
 ) -> str:
     """Return analysis text or the fallback. Never raises.
 
@@ -210,6 +225,7 @@ async def generate(
                 provider_name="simulation",
                 fallback_used=True,
                 user_id=user_id,
+                simulation=True,
                 extra={**(extra or {}), "simulation": True},
             )
         return text
@@ -218,6 +234,39 @@ async def generate(
         hit = _cache_get(cache_key)
         if hit is not None:
             return hit
+
+    # ── Spend enforcement gate (HARNESS.md §4) ────────────────────────────
+    # Checked AFTER the cache (cache hits cost nothing) and BEFORE any paid
+    # inference. When the cap is hit we return the rule-based fallback and
+    # never make the API call. This is the kill switch, not a dashboard.
+    budget_blocked = False
+    if settings.AI_BUDGET_ENFORCE:
+        try:
+            decision = await budget.check_budget(get_db(), user_id=user_id)
+            budget_blocked = decision.blocked
+        except Exception:
+            # Gate itself failed — do not block the user on an infra fault,
+            # but the ledger read inside check_budget already fails closed
+            # for the cases that matter.
+            budget_blocked = False
+
+    if budget_blocked:
+        text = fallback
+        if cache_key:
+            _cache_set(cache_key, text)
+        if job:
+            await _persist_receipt(
+                job,
+                system,
+                user,
+                text,
+                model=settings.AI_MODEL or default_model("gpt-4o-mini"),
+                provider_name="budget_blocked",
+                fallback_used=True,
+                user_id=user_id,
+                extra={**(extra or {}), "budget_blocked": True},
+            )
+        return text
 
     text = await _chat(system, user, max_tokens=settings.AI_MAX_TOKENS)
     fallback_used = text is None
@@ -258,9 +307,9 @@ async def thesis_for(
     asset: str,
     asset_class: str,
     quote_text: str,
-    regime: Optional[str],
+    regime: str | None,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     fallback = (
@@ -289,11 +338,11 @@ async def thesis_for(
 async def journal_review_for(
     asset: str,
     direction: str,
-    pnl: Optional[float],
+    pnl: float | None,
     source: str,
-    notes: Optional[str],
+    notes: str | None,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     result = "profitable" if pnl is not None and pnl > 0 else "losing"
@@ -325,7 +374,7 @@ async def post_trade_review_for(
     direction: str,
     pnl: float,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     result = "profitable" if pnl > 0 else "losing"
@@ -352,9 +401,9 @@ async def post_trade_review_for(
 
 
 async def backtest_review_for(
-    metrics: Dict,
+    metrics: dict,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     ret = metrics.get("total_return_pct")
@@ -410,9 +459,9 @@ async def backtest_review_for(
 
 
 async def mining_review_for(
-    context: Dict,
+    context: dict,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     """Explain whether a mining setup is profitable, grounded in the numbers."""
@@ -482,9 +531,9 @@ async def mining_review_for(
 
 
 async def scenario_review_for(
-    context: Dict,
+    context: dict,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     """Narrate a scenario run: which case hurts most, what flips it."""
@@ -542,9 +591,9 @@ async def scenario_review_for(
 
 
 async def allocation_review_for(
-    context: Dict,
+    context: dict,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     """Verdict on the capital allocation options, grounded in the numbers."""
@@ -593,9 +642,9 @@ async def allocation_review_for(
 
 
 async def gpu_review_for(
-    context: Dict,
+    context: dict,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     """Verdict on build-vs-cloud GPU economics, grounded in the assumptions."""
@@ -649,9 +698,9 @@ async def gpu_review_for(
 
 
 async def mine_vs_buy_review_for(
-    context: Dict,
+    context: dict,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     """Verdict on mine-vs-buy, honoring the reconciled capital accounting."""
@@ -728,9 +777,9 @@ async def mine_vs_buy_review_for(
 
 
 async def capital_review_for(
-    context: Dict,
+    context: dict,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     simulation: bool = False,
 ) -> str:
     """AI Capital Council review of a capital allocation run + proposal.

@@ -16,8 +16,8 @@ Nothing becomes OBSERVED_LIVE without an observed provider payload.
 import hashlib
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 from redis.asyncio import Redis
@@ -34,11 +34,11 @@ HARDWARE_REFRESH_SECONDS = 300
 COMPUTE_REFRESH_SECONDS = 120
 ENERGY_REFRESH_SECONDS = 60
 
-_redis: Optional[Redis] = None
+_redis: Redis | None = None
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _redis_client() -> Redis:
@@ -50,17 +50,17 @@ def _redis_client() -> Redis:
 
 def _parse_dt(value: Any) -> datetime:
     if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
     if isinstance(value, str) and value:
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
         except ValueError:
             pass
     return _now()
 
 
-def _items(payload: Any, key: str) -> List[Dict]:
+def _items(payload: Any, key: str) -> list[dict]:
     if isinstance(payload, list):
         return [x for x in payload if isinstance(x, dict)]
     if isinstance(payload, dict):
@@ -69,7 +69,7 @@ def _items(payload: Any, key: str) -> List[Dict]:
     return []
 
 
-def _public_fact(doc: Dict) -> Dict:
+def _public_fact(doc: dict) -> dict:
     out = dict(doc)
     out.pop("_id", None)
     out["fresh"] = not E.is_stale(out)
@@ -100,7 +100,7 @@ async def _fetch_json(url: str) -> Any:
 
 async def _store_snapshot(
     *, domain: str, provider: str, source_reference: str, payload: Any,
-    observed_at: Optional[datetime] = None, _db=None,
+    observed_at: datetime | None = None, _db=None,
 ) -> str:
     """Persist a provider payload once per content hash; cap large raw payloads."""
     db = _db or get_db()
@@ -141,7 +141,7 @@ async def _store_snapshot(
     return f"snapshot:{snapshot_id}"
 
 
-async def seed_reference_catalogs(_db=None) -> Dict[str, int]:
+async def seed_reference_catalogs(_db=None) -> dict[str, int]:
     """Seed versioned reference facts as assumptions. Never call them live."""
     db = _db or get_db()
     hardware = compute = 0
@@ -185,7 +185,7 @@ async def seed_reference_catalogs(_db=None) -> Dict[str, int]:
     return {"hardware_facts_seeded": hardware, "compute_facts_seeded": compute}
 
 
-async def refresh_hardware_offers(_db=None, *, force: bool = False) -> Dict:
+async def refresh_hardware_offers(_db=None, *, force: bool = False) -> dict:
     db = _db or get_db()
     await seed_reference_catalogs(db)
     url = getattr(settings, "HARDWARE_OFFERS_URL", "")
@@ -241,7 +241,7 @@ async def refresh_hardware_offers(_db=None, *, force: bool = False) -> Dict:
         return {"configured": True, "observed": 0, "status": "degraded", "error": str(exc)}
 
 
-async def refresh_compute_offers(_db=None, *, force: bool = False) -> Dict:
+async def refresh_compute_offers(_db=None, *, force: bool = False) -> dict:
     db = _db or get_db()
     await seed_reference_catalogs(db)
     url = getattr(settings, "GPU_OFFERS_URL", "")
@@ -297,7 +297,7 @@ async def refresh_compute_offers(_db=None, *, force: bool = False) -> Dict:
         return {"configured": True, "observed": 0, "status": "degraded", "error": str(exc)}
 
 
-async def refresh_energy_prices(_db=None, *, force: bool = False) -> Dict:
+async def refresh_energy_prices(_db=None, *, force: bool = False) -> dict:
     db = _db or get_db()
     url = getattr(settings, "ENERGY_PRICES_URL", "")
     if not url:
@@ -341,7 +341,7 @@ async def refresh_energy_prices(_db=None, *, force: bool = False) -> Dict:
         return {"configured": True, "observed": 0, "status": "degraded", "error": str(exc)}
 
 
-async def refresh_all(_db=None, *, force: bool = False) -> Dict:
+async def refresh_all(_db=None, *, force: bool = False) -> dict:
     db = _db or get_db()
     return {
         "hardware": await refresh_hardware_offers(db, force=force),
@@ -351,13 +351,13 @@ async def refresh_all(_db=None, *, force: bool = False) -> Dict:
 
 
 async def _query_product_facts(
-    *, domain: str, metric: str, user_id: Optional[str], product_key: Optional[str] = None,
-    product_value: Optional[str] = None, region: Optional[str] = None,
-    billing_model: Optional[str] = None, limit: int = 200, _db=None,
-) -> List[Dict]:
+    *, domain: str, metric: str, user_id: str | None, product_key: str | None = None,
+    product_value: str | None = None, region: str | None = None,
+    billing_model: str | None = None, limit: int = 200, _db=None,
+) -> list[dict]:
     db = _db or get_db()
     scope = [None] + ([user_id] if user_id else [])
-    query: Dict[str, Any] = {"domain": domain, "metric": metric, "user_id": {"$in": scope}}
+    query: dict[str, Any] = {"domain": domain, "metric": metric, "user_id": {"$in": scope}}
     if product_key and product_value:
         query[f"extra.{product_key}"] = product_value
     if region:
@@ -368,7 +368,7 @@ async def _query_product_facts(
     return [doc async for doc in cursor]
 
 
-def _resolve_candidates(facts: List[Dict], *, explicit: bool = False) -> Dict:
+def _resolve_candidates(facts: list[dict], *, explicit: bool = False) -> dict:
     fresh = [f for f in facts if not E.is_stale(f)]
     candidates = fresh if fresh else facts
     summary = E.summarize_resolution(candidates, explicit_user_input=explicit)
@@ -377,10 +377,10 @@ def _resolve_candidates(facts: List[Dict], *, explicit: bool = False) -> Dict:
 
 
 async def resolve_hardware_bundle(
-    model: str, user_id: Optional[str], *, explicit_price: Optional[float] = None,
-    explicit_hashrate: Optional[float] = None, explicit_power_watts: Optional[float] = None,
+    model: str, user_id: str | None, *, explicit_price: float | None = None,
+    explicit_hashrate: float | None = None, explicit_power_watts: float | None = None,
     _db=None,
-) -> Dict:
+) -> dict:
     db = _db or get_db()
     await refresh_hardware_offers(db)
     if explicit_price is not None:
@@ -416,11 +416,11 @@ async def resolve_hardware_bundle(
 
 
 async def resolve_compute_bundle(
-    model: str, user_id: Optional[str], *, region: Optional[str] = None,
-    billing_model: Optional[str] = None, explicit_capex: Optional[float] = None,
-    explicit_power_kw: Optional[float] = None, explicit_cloud_rate: Optional[float] = None,
+    model: str, user_id: str | None, *, region: str | None = None,
+    billing_model: str | None = None, explicit_capex: float | None = None,
+    explicit_power_kw: float | None = None, explicit_cloud_rate: float | None = None,
     _db=None,
-) -> Dict:
+) -> dict:
     db = _db or get_db()
     await refresh_compute_offers(db)
     if explicit_capex is not None:
@@ -457,7 +457,7 @@ async def resolve_compute_bundle(
     }
 
 
-async def resolve_energy_market(user_id: Optional[str], *, region: Optional[str] = None, _db=None) -> Dict:
+async def resolve_energy_market(user_id: str | None, *, region: str | None = None, _db=None) -> dict:
     db = _db or get_db()
     await refresh_energy_prices(db)
     facts = await _query_product_facts(domain="energy", metric="power_price", user_id=user_id,
@@ -465,7 +465,7 @@ async def resolve_energy_market(user_id: Optional[str], *, region: Optional[str]
     return _resolve_candidates(facts)
 
 
-async def list_hardware_offers(user_id: Optional[str], _db=None) -> Dict:
+async def list_hardware_offers(user_id: str | None, _db=None) -> dict:
     db = _db or get_db()
     refresh = await refresh_hardware_offers(db)
     facts = await _query_product_facts(domain="hardware", metric="asic_price", user_id=user_id, _db=db)
@@ -473,9 +473,9 @@ async def list_hardware_offers(user_id: Optional[str], _db=None) -> Dict:
 
 
 async def list_compute_offers(
-    user_id: Optional[str], *, model: Optional[str] = None, region: Optional[str] = None,
-    billing_model: Optional[str] = None, _db=None,
-) -> Dict:
+    user_id: str | None, *, model: str | None = None, region: str | None = None,
+    billing_model: str | None = None, _db=None,
+) -> dict:
     db = _db or get_db()
     refresh = await refresh_compute_offers(db)
     facts = await _query_product_facts(
@@ -486,7 +486,7 @@ async def list_compute_offers(
     return {"refresh": refresh, "count": len(facts), "offers": [_public_fact(f) for f in facts]}
 
 
-async def list_energy_prices(user_id: Optional[str], *, region: Optional[str] = None, _db=None) -> Dict:
+async def list_energy_prices(user_id: str | None, *, region: str | None = None, _db=None) -> dict:
     db = _db or get_db()
     refresh = await refresh_energy_prices(db)
     facts = await _query_product_facts(domain="energy", metric="power_price", user_id=user_id,

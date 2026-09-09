@@ -2,20 +2,25 @@
 Execution API — Phase 1 paper only. Phase 2 live routes will reuse the same surface.
 """
 
+
 from fastapi import APIRouter, Depends, HTTPException
-from typing import List, Optional
+
 from app.core.plans import require_feature
+from app.engines.execution_engine import ALGO_CATALOG, execution_engine
 from app.models.execution import (
-    ParentOrderCreate, ParentOrder, ExecutionAnalytics,
-    ExecutionAlgoInfo, ExecutionAlgoConfig, ExecutionUrgency,
+    ExecutionAlgoConfig,
+    ExecutionAlgoInfo,
+    ExecutionAnalytics,
+    ExecutionUrgency,
+    ParentOrder,
+    ParentOrderCreate,
 )
 from app.models.schemas import AssetClass
-from app.engines.execution_engine import execution_engine, ALGO_CATALOG
 
 router = APIRouter(prefix="/execution", tags=["execution"])
 
 
-@router.get("/algos", response_model=List[ExecutionAlgoInfo])
+@router.get("/algos", response_model=list[ExecutionAlgoInfo])
 async def list_execution_algos():
     """Educational catalog of supported execution strategies."""
     return ALGO_CATALOG
@@ -55,8 +60,8 @@ async def submit_order(payload: ParentOrderCreate, current_user=Depends(require_
         raise HTTPException(400, str(e))
 
 
-@router.get("/orders", response_model=List[ParentOrder])
-async def list_orders(status: Optional[str] = None, current_user=Depends(require_feature("execution_sim"))):
+@router.get("/orders", response_model=list[ParentOrder])
+async def list_orders(status: str | None = None, current_user=Depends(require_feature("execution_sim"))):
     return await execution_engine.list_parent_orders(current_user["_id"], status)
 
 

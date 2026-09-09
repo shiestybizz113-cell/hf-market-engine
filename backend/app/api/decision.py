@@ -6,23 +6,30 @@ evidence receipts that separate observed data from assumptions. In live mode
 missing price/network data returns 503 — never a synthetic live number.
 """
 
-from typing import Dict, List
+
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.core import ai
-from app.core.scenario import SCENARIO_PRESETS, run_scenario_set
-from app.core.allocation import allocate, rank_options, gpu_lanes
-from app.api.mining import _catalog_item, _live_context, _persist_mining_receipt
-from app.core.plans import require_feature, has_feature, try_consume_ai_review
-from app.models.schemas import (
-    ScenarioPreset, ScenarioVector, ScenarioRunRequest, ScenarioRunResult,
-    ScenarioRunResultItem, AllocationRequest, AllocationResult, AllocationOption,
-    GpuEconomicsRequest, GpuEconomicsResult, GpuLaneResult,
-    MiningNetworkData,
-)
-from app.core.mining import network_data_dict
-from app.core.database import get_db
 from app.api.auth import get_current_user
+from app.api.mining import _catalog_item, _live_context, _persist_mining_receipt
+from app.core import ai
+from app.core.allocation import allocate, gpu_lanes, rank_options
+from app.core.database import get_db
+from app.core.mining import network_data_dict
+from app.core.plans import has_feature, require_feature, try_consume_ai_review
+from app.core.scenario import SCENARIO_PRESETS, run_scenario_set
+from app.models.schemas import (
+    AllocationOption,
+    AllocationRequest,
+    AllocationResult,
+    GpuEconomicsRequest,
+    GpuEconomicsResult,
+    GpuLaneResult,
+    MiningNetworkData,
+    ScenarioPreset,
+    ScenarioRunRequest,
+    ScenarioRunResult,
+    ScenarioRunResultItem,
+)
 
 router = APIRouter(prefix="/decision", tags=["decision"])
 
@@ -54,7 +61,7 @@ async def scenario_run(
     asic = _catalog_item(payload.asic_model, payload.model_dump())
     network, btc_price, simulation, prov = await _live_context()
 
-    vectors: List[Dict] = []
+    vectors: list[dict] = []
     for name in payload.preset_names:
         preset = SCENARIO_PRESETS.get(name)
         if not preset:
@@ -278,7 +285,7 @@ async def gpu_run(
         gpu_units_cap=payload.gpu_units_cap,
     )
 
-    def lane(key: str) -> Dict:
+    def lane(key: str) -> dict:
         return next(o for o in (build, cloud) if o["key"] == key)
 
     context = {
@@ -326,7 +333,7 @@ async def gpu_run(
             simulation=False,
         )
 
-    def lane_result(o: Dict) -> GpuLaneResult:
+    def lane_result(o: dict) -> GpuLaneResult:
         return GpuLaneResult(
             key=o["key"],
             label=o["label"],

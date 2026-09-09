@@ -6,14 +6,13 @@ the same scenario definitions while passing the owned fleet through every
 recalculation and applying the same integrity corrections as the base run.
 """
 
-from typing import Dict, List, Optional
 
 from app.core.capital_allocation import run_capital_allocation
 from app.core.capital_integrity import apply_energy_storage_integrity
 from app.core.mining import NetworkData
 
 
-def _shift_network(net: Optional[Dict], difficulty: float) -> Optional[NetworkData]:
+def _shift_network(net: dict | None, difficulty: float) -> NetworkData | None:
     if net is None:
         return None
     return NetworkData(
@@ -27,10 +26,10 @@ def _shift_network(net: Optional[Dict], difficulty: float) -> Optional[NetworkDa
     )
 
 
-def run_capital_scenarios_v2(*, base: Dict, vectors: List[Dict], owned: Optional[Dict]) -> List[Dict]:
+def run_capital_scenarios_v2(*, base: dict, vectors: list[dict], owned: dict | None) -> list[dict]:
     base_inputs = base["inputs"]
     base_observed = base["observed"]
-    out: List[Dict] = []
+    out: list[dict] = []
 
     for vec in vectors:
         btc_shift = float(vec.get("btc_price_shift_pct", 0.0))
@@ -98,7 +97,7 @@ def run_capital_scenarios_v2(*, base: Dict, vectors: List[Dict], owned: Optional
         # basis as the base Capital run.
         apply_energy_storage_integrity(res)
 
-        matrix: Dict[str, Dict] = {}
+        matrix: dict[str, dict] = {}
         for key, lane in res["lanes"].items():
             matrix[key] = {
                 "available": lane["available"],

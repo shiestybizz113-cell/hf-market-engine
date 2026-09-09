@@ -40,7 +40,10 @@ export default function App() {
         <Route path="/crypto" element={<LiveMarket market="crypto" />} />
         <Route path="/stocks" element={<LiveMarket market="stock" />} />
         <Route path="/etfs" element={<LiveMarket market="etf" />} />
+        <Route path="/forex" element={<LiveMarket market="forex" />} />
+        <Route path="/commodities" element={<LiveMarket market="commodity" />} />
         <Route path="/macro" element={<LiveMarket market="macro" />} />
+        <Route path="/defi" element={<LiveMarket market="defi" />} />
         <Route path="/watchlist" element={<Watchlist />} />
         <Route path="/alpha" element={<AlphaScanner />} />
         <Route path="/capital" element={<Capital />} />

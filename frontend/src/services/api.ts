@@ -94,6 +94,7 @@ export const cancelExecutionOrder = (id: string) => api.post(`/execution/orders/
 export const runCapitalAllocation = (data: any) => api.post('/capital/run', data)
 export const runCapitalScenarios = (data: any) => api.post('/capital/scenarios', data)
 export const runCapitalOptimize = (data: any) => api.post('/capital/optimize', data)
+export const runCapitalRiskGrid = (data: any) => api.post('/capital/risk-grid', data)
 
 // Capital V2 infrastructure market data
 export const getHardwareOffers = () => api.get('/hardware/offers')

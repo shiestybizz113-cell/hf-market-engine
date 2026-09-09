@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from typing import Optional, List
 from datetime import datetime
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+
 from app.api.auth import get_current_user
 from app.core.plans import consume_ai_review
 from app.engines.journal_engine import journal_engine
@@ -13,14 +14,14 @@ class JournalCreate(BaseModel):
     asset: str
     direction: str
     entry_price: float
-    exit_price: Optional[float] = None
+    exit_price: float | None = None
     quantity: float = 0
-    pnl: Optional[float] = None
-    strategy_id: Optional[str] = None
-    notes: Optional[str] = None
-    emotion: Optional[str] = None
-    mistake_tag: Optional[str] = None
-    lesson: Optional[str] = None
+    pnl: float | None = None
+    strategy_id: str | None = None
+    notes: str | None = None
+    emotion: str | None = None
+    mistake_tag: str | None = None
+    lesson: str | None = None
 
 
 class JournalOut(BaseModel):
@@ -29,18 +30,18 @@ class JournalOut(BaseModel):
     asset: str
     direction: str
     entry_price: float
-    exit_price: Optional[float]
+    exit_price: float | None
     quantity: float
-    pnl: Optional[float]
+    pnl: float | None
     source: str
-    notes: Optional[str]
-    emotion: Optional[str]
-    mistake_tag: Optional[str]
-    ai_review: Optional[str]
-    lesson: Optional[str]
+    notes: str | None
+    emotion: str | None
+    mistake_tag: str | None
+    ai_review: str | None
+    lesson: str | None
 
 
-@router.get("", response_model=List[JournalOut])
+@router.get("", response_model=list[JournalOut])
 async def list_journal(current_user=Depends(get_current_user)):
     entries = await journal_engine.list_entries(current_user["_id"])
     return [

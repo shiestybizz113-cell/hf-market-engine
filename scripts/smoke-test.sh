@@ -24,7 +24,7 @@ curl -sf "$BASE/api/market/overview" | head -c 300
 echo ""
 
 echo "== Register test user =="
-EMAIL="smoke_$(date +%s)@test.local"
+EMAIL="smoke_$(date +%s)@example.com"
 curl -sf -X POST "$BASE/api/auth/register" \
   -H "Content-Type: application/json" \
   -d "{\"email\":\"$EMAIL\",\"password\":\"smokeTest1!\",\"full_name\":\"Smoke\"}" | head -c 200

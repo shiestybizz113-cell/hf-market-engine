@@ -1,12 +1,40 @@
-"""Evidence APIs — AI receipts plus Capital V2 immutable fact/proof graph."""
+"""
+Evidence receipts + facts API — Archisynapse v1.1 + V2 evidence fabric.
 
-from typing import Optional
+Every AI analysis call produces a cryptographically signed receipt.
+This API lets authenticated users inspect, verify, and audit their
+receipt history.
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+V2 adds:
+  GET  /evidence/facts              — list immutable evidence facts
+  GET  /evidence/facts/{fact_id}    — single fact with full trace
+  GET  /evidence/graph/{receipt_id} — receipt -> facts -> sources proof graph
+  POST /evidence/seed               — seed reference facts from catalogs
+
+Endpoints:
+  GET  /evidence/receipts          — list receipts (paginated, verified inline)
+  GET  /evidence/receipts/{id}     — single receipt with full verification
+  GET  /evidence/public-key        — deployment's Ed25519 public key (offline verify)
+  POST /evidence/verify            — offline verify a receipt payload
+"""
+
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from app.api.auth import get_current_user
 from app.core import evidence as E
+from app.core.archisynapse import (
+    get_public_key_hex,
+    get_receipt,
+    list_receipts,
+    verify_receipt,
+)
+from app.core.archisynapse.crypto import verify
 from app.core.database import get_db
+from app.core.evidence_broker import capture_observation
+from app.core.gpu import GPU_CATALOG
+from app.core.mining import ASIC_CATALOG
 from app.core.redaction import safe_source_reference
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
@@ -38,201 +66,217 @@ def _public_snapshot(doc: dict) -> dict:
 
 
 @router.get("/receipts")
-async def list_receipts(
+async def list_user_receipts(
     limit: int = 20,
-    job: Optional[str] = None,
+    skip: int = 0,
+    job: str | None = None,
     current_user=Depends(get_current_user),
 ):
+    """
+    List the current user's AI analysis receipts, newest first.
+    Each receipt includes signature_valid — offline Ed25519 verification
+    run at query time. Any False means the receipt was tampered with
+    after signing.
+    """
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+
     db = get_db()
-    query = {"user_id": current_user["_id"]}
-    if job:
-        query["job"] = job
-    cursor = db.analysis_receipts.find(query).sort("generated_at", -1).limit(limit)
-    out = []
-    async for doc in cursor:
-        doc["id"] = doc.pop("_id")
-        doc.pop("system_prompt", None)
-        out.append(doc)
-    return {"count": len(out), "receipts": out}
+    receipts = await list_receipts(
+        user_id=current_user["_id"],
+        db=db,
+        job=job,
+        limit=limit,
+        skip=skip,
+    )
+    return {"count": len(receipts), "receipts": receipts}
 
 
 @router.get("/receipts/{receipt_id}")
-async def get_receipt(receipt_id: str, current_user=Depends(get_current_user)):
+async def get_single_receipt(
+    receipt_id: str,
+    current_user=Depends(get_current_user),
+):
+    """
+    Fetch a single receipt with full signature verification.
+    Returns 404 if not found or belongs to another user.
+    Returns 200 with signature_valid=False if the receipt was tampered.
+    """
     db = get_db()
-    doc = await db.analysis_receipts.find_one(
-        {"_id": receipt_id, "user_id": current_user["_id"]}
+    receipt = await get_receipt(
+        receipt_id=receipt_id,
+        user_id=current_user["_id"],
+        db=db,
     )
-    if not doc:
+    if not receipt:
         raise HTTPException(status_code=404, detail="Receipt not found")
-    doc["id"] = doc.pop("_id")
-    doc.pop("system_prompt", None)
-    return doc
 
+    sig_valid = verify_receipt(receipt)
+    row = receipt.payload.model_dump()
+    row["id"] = row.pop("receipt_id")
+    row["signature_valid"] = sig_valid
+    row["signature"] = receipt.signature
+    row["public_key"] = receipt.public_key
+    row["payload_json"] = receipt.payload_json
+    row["receipt_persisted"] = receipt.receipt_persisted
+
+    return row
+
+
+@router.get("/public-key")
+async def deployment_public_key():
+    """
+    Returns the Ed25519 public key for this deployment.
+    Use this to verify any receipt offline without contacting the API:
+
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_key))
+        pub.verify(bytes.fromhex(signature), payload_json.encode())
+    """
+    return {
+        "public_key": get_public_key_hex(),
+        "algorithm": "Ed25519",
+        "usage": "Verify receipt.payload_json with receipt.signature",
+    }
+
+
+class VerifyRequest(BaseModel):
+    payload_json: str
+    signature: str
+    public_key: str
+
+
+@router.post("/verify")
+async def verify_receipt_payload(body: VerifyRequest):
+    """
+    Offline verify any receipt payload without authentication.
+    Useful for third-party auditors who hold a receipt export.
+    """
+    valid = verify(body.payload_json, body.signature, body.public_key)
+    return {
+        "signature_valid": valid,
+        "message": "Receipt is authentic and unmodified." if valid
+                   else "Signature verification FAILED — receipt may have been tampered with.",
+    }
+
+
+# --------------------------------------------------------------------------- #
+# V2 Evidence Fabric
+# --------------------------------------------------------------------------- #
 
 @router.get("/facts")
 async def list_facts(
-    domain: Optional[str] = Query(default=None),
-    metric: Optional[str] = Query(default=None),
-    subject_id: Optional[str] = Query(default=None),
-    include_stale: bool = Query(default=True),
-    limit: int = Query(default=100, ge=1, le=500),
+    domain: str | None = None,
+    metric: str | None = None,
+    subject_id: str | None = None,
+    limit: int = 50,
     current_user=Depends(get_current_user),
 ):
+    """List immutable evidence facts. Scoped to the caller + system facts."""
     db = get_db()
-    query: dict = {"user_id": {"$in": [None, current_user["_id"]]}}
-    if domain:
-        query["domain"] = domain
-    if metric:
-        query["metric"] = metric
-    if subject_id:
-        query["subject_id"] = subject_id
-
-    cursor = db.evidence_facts.find(query).sort("observed_at", -1).limit(limit)
-    facts = []
-    async for doc in cursor:
-        public = _public_fact(doc)
-        if include_stale or public["fresh"]:
-            facts.append(public)
+    if domain and metric:
+        facts = await E.facts_for(
+            domain=domain, metric=metric, subject_id=subject_id,
+            user_id=current_user["_id"], limit=limit, _db=db,
+        )
+    else:
+        # Broad query: user_id scope, latest facts
+        scope = [None, current_user["_id"]]
+        query: dict = {}
+        if domain:
+            query["domain"] = domain
+        query["user_id"] = {"$in": scope}
+        cursor = db.evidence_facts.find(query).sort("observed_at", -1).limit(limit)
+        facts = []
+        async for doc in cursor:
+            doc.pop("_id", None)
+            facts.append(doc)
+    for f in facts:
+        f["age_seconds"] = round(E.age_seconds(f), 1)
+        f["fresh"] = not E.is_stale(f)
     return {"count": len(facts), "facts": facts}
 
 
-@router.get("/facts/{evidence_id}")
-async def get_fact(evidence_id: str, current_user=Depends(get_current_user)):
+@router.get("/facts/{fact_id}")
+async def get_fact(
+    fact_id: str,
+    current_user=Depends(get_current_user),
+):
+    """Single evidence fact with full provenance and freshness."""
     db = get_db()
-    doc = await db.evidence_facts.find_one({
-        "evidence_id": evidence_id,
-        "user_id": {"$in": [None, current_user["_id"]]},
-    })
-    if not doc:
+    fact = await E.get_fact(fact_id, db)
+    if not fact:
         raise HTTPException(status_code=404, detail="Evidence fact not found")
-    return _public_fact(doc)
+    fact["age_seconds"] = round(E.age_seconds(fact), 1)
+    fact["fresh"] = not E.is_stale(fact)
+    return fact
 
 
 @router.get("/graph/{receipt_id}")
-async def proof_graph(receipt_id: str, current_user=Depends(get_current_user)):
-    """Return a traversable receipt -> lane -> fact -> source -> snapshot graph."""
+async def proof_graph(
+    receipt_id: str,
+    current_user=Depends(get_current_user),
+):
+    """Proof graph: receipt -> evidence facts -> sources.
+
+    Reconstructs every calculation the receipt consumed so the proof drawer
+    can show exactly which facts, providers and observations backed each number.
+    """
+    graph = await E.build_proof_graph(receipt_id, current_user["_id"], _db=get_db())
+    if not graph:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+    return graph
+
+
+@router.post("/seed")
+async def seed_reference_facts(
+    current_user=Depends(get_current_user),
+):
+    """Seed reference facts from ASIC + GPU catalogs.
+
+    Idempotent: capture_observation dedupes against the latest fresh fact
+    with the same (domain, metric, subject, provider). Safe to call repeatedly.
+    """
     db = get_db()
-    base = await E.build_proof_graph(receipt_id, current_user["_id"], db)
-    if not base:
-        raise HTTPException(status_code=404, detail="Capital/mining receipt not found")
+    seeded = []
 
-    facts = [_public_fact(f) for f in base.get("facts", [])]
-    lanes_evidence = base.get("lanes_evidence", {})
+    # ASIC reference facts: price + hashrate + power per model.
+    for key, cat in ASIC_CATALOG.items():
+        for metric, value, unit in [
+            ("asic_price", float(cat["price_usd"]), "usd"),
+            ("asic_hashrate", float(cat["hashrate_ths"]), "ths"),
+            ("asic_power", float(cat["power_watts"]), "watts"),
+        ]:
+            eid = await capture_observation(
+                domain="hardware", metric=metric, subject_id=key,
+                value=value, unit=unit, state=E.USER_ASSUMPTION,
+                provider="reference_catalog", source_type="reference",
+                _db=db,
+            )
+            seeded.append({"domain": "hardware", "metric": metric, "subject": key, "fact_id": eid})
 
-    snapshots = []
-    snapshot_by_id = {}
-    for fact in facts:
-        raw_ref = fact.get("raw_snapshot_ref")
-        if not raw_ref or not raw_ref.startswith("snapshot:"):
-            continue
-        snapshot_id = raw_ref.split(":", 1)[1]
-        if snapshot_id in snapshot_by_id:
-            continue
-        snap = await db.provider_snapshots.find_one({"_id": snapshot_id})
-        if snap:
-            public_snap = _public_snapshot(snap)
-            snapshot_by_id[snapshot_id] = public_snap
-            snapshots.append(public_snap)
+    # GPU reference facts: capex + power + cloud rental per model.
+    for key, cat in GPU_CATALOG.items():
+        for metric, value, unit in [
+            ("gpu_capex", float(cat["capex_usd"]), "usd"),
+            ("gpu_power", float(cat["power_kw"]), "kw"),
+            ("compute_offer", float(cat["cloud_rental_usd_hr"]), "usd_hr"),
+        ]:
+            eid = await capture_observation(
+                domain="gpu", metric=metric, subject_id=key,
+                value=value, unit=unit, state=E.USER_ASSUMPTION,
+                provider="reference_catalog", source_type="reference",
+                _db=db,
+            )
+            seeded.append({"domain": "gpu", "metric": metric, "subject": key, "fact_id": eid})
 
-    nodes = [{
-        "kind": "receipt",
-        "id": f"receipt:{receipt_id}",
-        "receipt_id": receipt_id,
-        "analysis_type": base.get("receipt", {}).get("analysis_type"),
-    }]
-    edges = []
+    return {"ok": True, "seeded": len(seeded), "facts": seeded}
 
-    fact_by_id = {f["evidence_id"]: f for f in facts}
-    fact_ids_in_lanes = set()
 
-    for lane_key, lane in lanes_evidence.items():
-        lane_node = f"lane:{lane_key}"
-        nodes.append({
-            "kind": "lane",
-            "id": lane_node,
-            "lane_key": lane_key,
-            "label": lane.get("label", lane_key),
-            "quality_label": lane.get("quality_label"),
-            "quality_score": lane.get("quality_score"),
-        })
-        edges.append({"from": f"receipt:{receipt_id}", "to": lane_node, "relation": "contains_lane"})
-        for fact_id in lane.get("facts_used", []):
-            if fact_id in fact_by_id:
-                fact_ids_in_lanes.add(fact_id)
-                edges.append({"from": lane_node, "to": f"fact:{fact_id}", "relation": "consumed_fact"})
-
-    source_nodes = set()
-    snapshot_nodes = set()
-    for fact in facts:
-        fact_id = fact["evidence_id"]
-        nodes.append({
-            "kind": "fact",
-            "id": f"fact:{fact_id}",
-            "evidence_id": fact_id,
-            "domain": fact.get("domain"),
-            "metric": fact.get("metric"),
-            "subject_id": fact.get("subject_id"),
-            "value": fact.get("value"),
-            "unit": fact.get("unit"),
-            "state": fact.get("state"),
-            "fresh": fact.get("fresh"),
-            "provider": fact.get("provider"),
-        })
-        if fact_id not in fact_ids_in_lanes:
-            edges.append({
-                "from": f"receipt:{receipt_id}",
-                "to": f"fact:{fact_id}",
-                "relation": "receipt_context_fact",
-            })
-
-        provider = fact.get("provider") or "unknown"
-        source_reference = fact.get("source_reference") or "unspecified"
-        source_id = f"source:{provider}:{source_reference}"
-        if source_id not in source_nodes:
-            source_nodes.add(source_id)
-            nodes.append({
-                "kind": "source",
-                "id": source_id,
-                "provider": provider,
-                "source_type": fact.get("source_type"),
-                "source_reference": source_reference,
-            })
-        edges.append({"from": f"fact:{fact_id}", "to": source_id, "relation": "sourced_from"})
-
-        raw_ref = fact.get("raw_snapshot_ref")
-        if raw_ref and raw_ref.startswith("snapshot:"):
-            snapshot_id = raw_ref.split(":", 1)[1]
-            if snapshot_id in snapshot_by_id:
-                snapshot_node = f"snapshot:{snapshot_id}"
-                if snapshot_node not in snapshot_nodes:
-                    snapshot_nodes.add(snapshot_node)
-                    snap = snapshot_by_id[snapshot_id]
-                    nodes.append({
-                        "kind": "snapshot",
-                        "id": snapshot_node,
-                        "snapshot_id": snapshot_id,
-                        "provider": snap.get("provider"),
-                        "sha256": snap.get("sha256"),
-                        "observed_at": snap.get("observed_at"),
-                        "raw_bytes": snap.get("raw_bytes"),
-                        "payload_truncated": snap.get("payload_truncated"),
-                    })
-                edges.append({"from": source_id, "to": snapshot_node, "relation": "captured_in"})
-
-    return {
-        "receipt": base.get("receipt"),
-        "facts": facts,
-        "lanes_evidence": lanes_evidence,
-        "snapshots": snapshots,
-        "graph": {"nodes": nodes, "edges": edges},
-        "proof_contract": {
-            "path": "receipt -> lane -> immutable evidence fact -> source/provider -> snapshot hash",
-            "immutable_facts": True,
-            "losing_sources_preserved": True,
-            "raw_provider_payload_public": False,
-            "source_credentials_public": False,
-            "user_scope": "global facts + requesting user's facts only",
-        },
-    }
+def _public_fact(doc: dict) -> dict:
+    """Redact and annotate a fact for public API response."""
+    out = dict(doc)
+    out.pop("_id", None)
+    out["fresh"] = not E.is_stale(out) if hasattr(E, "is_stale") else True
+    out["age_seconds"] = round(E.age_seconds(out), 1) if hasattr(E, "age_seconds") else 0
+    return out

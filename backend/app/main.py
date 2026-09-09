@@ -1,56 +1,79 @@
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.api import (
-    auth, billing, capital, decision, evidence, execution, infrastructure,
-    journal, market, mining, system, trading,
+    assets,
+    auth,
+    billing,
+    capital,
+    compute,
+    decision,
+    energy,
+    evidence,
+    execution,
+    hardware,
+    infrastructure,
+    journal,
+    market,
+    mining,
+    system,
+    trading,
 )
 from app.core.config import settings
-from app.core.database import close_mongo_connection, connect_to_mongo, get_db
+from app.core.database import close_mongo_connection, connect_to_mongo
 from app.core.infrastructure_data import close_infrastructure_cache
-from app.core.rate_limit import check_rate_limit, close_rate_limit_client
+from app.core.rate_limit import (
+    check_rate_limit,
+    close_rate_limit_client,
+    limiter,
+    rate_limit_handler,
+)
+from app.core.security_headers import SecurityHeadersMiddleware
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_to_mongo()
     yield
-    await close_infrastructure_cache()
-    await close_rate_limit_client()
     await close_mongo_connection()
+    await close_rate_limit_client()
+    await close_infrastructure_cache()
 
 
 app = FastAPI(
     title="hf-market-engine",
     description=(
-        "Capital + Compute Intelligence Infrastructure. Evidence-backed market, "
-        "mining, compute, energy and capital-allocation research. Read-only; "
-        "the Capital optimizer proposes and never executes."
+        "AI Trading Intelligence OS for Crypto, Stocks, ETFs, Forex, Macro & DeFi.\n\n"
+        "Research, simulation and AI-assisted analysis only. "
+        "No real trading. No real spend. All proposals and evidence-backed."
     ),
-    version="0.2.0-capital-v2",
     lifespan=lifespan,
 )
 
-if settings.cors_origin_list:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origin_list,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+# CORS
+if settings.CORS_ORIGINS:
+    origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",")]
 else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    origins = ["http://localhost:3000", "http://localhost:5173"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Rate limiting middleware (slowapi)
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 @app.middleware("http")
@@ -78,10 +101,14 @@ async def public_edge_controls(request: Request, call_next):
         response.headers["X-RateLimit-Limit"] = str(limit["limit"])
         response.headers["X-RateLimit-Remaining"] = str(limit.get("remaining", 0))
     if limit.get("degraded"):
-        response.headers["X-RateLimit-State"] = "degraded"
+        response.headers["X-RateLimit-Degraded"] = "1"
     return response
 
 
+app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
+
+
+# Routers
 app.include_router(auth.router, prefix="/api")
 app.include_router(market.router, prefix="/api")
 app.include_router(trading.router, prefix="/api")
@@ -93,6 +120,10 @@ app.include_router(evidence.router, prefix="/api")
 app.include_router(mining.router, prefix="/api")
 app.include_router(decision.router, prefix="/api")
 app.include_router(capital.router, prefix="/api")
+app.include_router(assets.router, prefix="/api")
+app.include_router(hardware.router, prefix="/api")
+app.include_router(energy.router, prefix="/api")
+app.include_router(compute.router, prefix="/api")
 app.include_router(infrastructure.router, prefix="/api")
 
 
@@ -100,42 +131,16 @@ app.include_router(infrastructure.router, prefix="/api")
 async def root():
     return {
         "product": "hf-market-engine",
-        "tagline": "Capital + Compute Intelligence Infrastructure",
-        "phase": "Capital Command Center V2",
-        "read_only": True,
+        "tagline": "AI Trading Intelligence OS",
+        "phase": "1 – Research & Simulation",
         "disclaimer": (
-            "Research, simulation and AI-assisted capital intelligence. Not financial "
-            "advice. The Capital optimizer proposes only and cannot trade, spend or deploy."
+            "This platform provides market research, simulation, and AI-assisted analysis. "
+            "It is not financial advice and does not guarantee profits. "
+            "Trading crypto, stocks, ETFs, forex and other assets involves substantial risk."
         ),
-    }
-
-
-@app.get("/api/live")
-async def liveness():
-    return {"status": "ok", "service": settings.APP_NAME}
-
-
-@app.get("/api/ready")
-async def readiness():
-    try:
-        await get_db().command("ping")
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="database unavailable") from exc
-    return {
-        "status": "ready",
-        "service": settings.APP_NAME,
-        "market_data_mode": settings.MARKET_DATA_MODE,
     }
 
 
 @app.get("/api/health")
 async def api_health():
-    """Compatibility health route; now checks the shared datastore."""
-    try:
-        await get_db().command("ping")
-        database = "ok"
-    except Exception:
-        database = "error"
-    if database != "ok":
-        raise HTTPException(status_code=503, detail={"status": "degraded", "database": database})
-    return {"status": "ok", "service": settings.APP_NAME, "database": database}
+    return {"status": "ok", "service": settings.APP_NAME}

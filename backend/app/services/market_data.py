@@ -9,43 +9,66 @@ provider is configured, and they are labeled as such.
 Research & simulation only. Not financial advice.
 """
 
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from datetime import UTC, datetime
 
+from app.core.config import settings
 from app.core.market_providers import (
+    demo_price_series,
     market_providers,
     universe_for,
 )
-from app.models.schemas import PriceQuote, MarketOverview, AssetClass
+from app.models.schemas import AssetClass, MarketOverview, PriceQuote
 
 _CACHE_TTL = 60
+_HISTORY_MAX = 120
 
 
 class MarketDataService:
     """Abstraction layer. Swaps demo/provider implementations later."""
 
     def __init__(self) -> None:
-        self._cache: Dict[AssetClass, Tuple[float, Dict[str, PriceQuote]]] = {}
+        self._cache: dict[AssetClass, tuple[float, dict[str, PriceQuote]]] = {}
+        self._history: dict[AssetClass, dict[str, list[float]]] = {}
 
-    def _cached_quotes(self, asset_class: AssetClass) -> Optional[Dict[str, PriceQuote]]:
+    def _append_history(self, asset_class: AssetClass, quotes: dict[str, PriceQuote]) -> None:
+        for sym, q in quotes.items():
+            bucket = self._history.setdefault(asset_class, {}).setdefault(sym, [])
+            bucket.append(q.price)
+            del bucket[:-_HISTORY_MAX]
+
+    async def get_series(self, symbol: str, asset_class: AssetClass, points: int = 90) -> list[float]:
+        """Rolling price series for correlation analysis.
+
+        Demo mode returns a deterministic synthetic series (seeded by
+        symbol+class) so the correlation radar is stable. Live mode returns
+        whatever real observations have accumulated; if too few, the caller
+        receives what exists and decides how to handle the gap.
+        """
+        symbol = symbol.strip().upper()
+        if settings.MARKET_DATA_MODE == "demo":
+            return demo_price_series(symbol, asset_class, points)
+        bucket = self._history.get(asset_class, {}).get(symbol, [])
+        return bucket[-points:]
+
+    def _cached_quotes(self, asset_class: AssetClass) -> dict[str, PriceQuote] | None:
         entry = self._cache.get(asset_class)
         if not entry:
             return None
         ts, quotes = entry
-        if (datetime.now(timezone.utc) - ts).total_seconds() > _CACHE_TTL:
+        if (datetime.now(UTC) - ts).total_seconds() > _CACHE_TTL:
             return None
         return quotes
 
-    async def _class_quotes(self, asset_class: AssetClass) -> Dict[str, PriceQuote]:
+    async def _class_quotes(self, asset_class: AssetClass) -> dict[str, PriceQuote]:
         cached = self._cached_quotes(asset_class)
         if cached is not None:
             return cached
 
         symbols = list(universe_for(asset_class).keys())
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         normalized = await market_providers.get_quotes(symbols, asset_class)
 
-        quotes: Dict[str, PriceQuote] = {}
+        quotes: dict[str, PriceQuote] = {}
         for sym in symbols:
             nq = normalized.get(sym)
             if nq is None:
@@ -73,16 +96,21 @@ class MarketDataService:
         # would re-stamp the cache timestamp with nothing usable.
         if quotes:
             self._cache[asset_class] = (now, quotes)
+            self._append_history(asset_class, quotes)
         return quotes
 
-    async def get_quote(self, symbol: str, asset_class: AssetClass) -> Optional[PriceQuote]:
+    async def class_quotes(self, asset_class: AssetClass) -> dict[str, PriceQuote]:
+        """All current quotes for an asset class (public accessor)."""
+        return await self._class_quotes(asset_class)
+
+    async def get_quote(self, symbol: str, asset_class: AssetClass) -> PriceQuote | None:
         symbol = symbol.strip().upper()
         if not symbol:
             return None
         quotes = await self._class_quotes(asset_class)
         if symbol in quotes:
             return quotes[symbol]
-        if asset_class == AssetClass.CRYPTO:
+        if asset_class in (AssetClass.CRYPTO, AssetClass.DEFI):
             for ticker, meta in universe_for(asset_class).items():
                 if (meta.get("id") or "").lower() == symbol.lower():
                     return quotes.get(ticker)
@@ -116,10 +144,10 @@ class MarketDataService:
             total_market_cap=tmc,
             total_volume_24h=tv,
             btc_dominance=dom,
-            last_updated=datetime.now(timezone.utc),
+            last_updated=datetime.now(UTC),
         )
 
-    def _classify_regime(self, market_change_24h: Optional[float]) -> Tuple[str, float]:
+    def _classify_regime(self, market_change_24h: float | None) -> tuple[str, float]:
         if market_change_24h is None:
             return "mixed", 45.0
         if market_change_24h > 2.5:
@@ -128,7 +156,7 @@ class MarketDataService:
             return "risk-off", 68.0
         return "mixed", 50.0
 
-    async def get_movers(self, asset_class: AssetClass) -> Dict[str, list]:
+    async def get_movers(self, asset_class: AssetClass) -> dict[str, list]:
         quotes = await self._class_quotes(asset_class)
         items = [
             {

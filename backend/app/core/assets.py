@@ -8,12 +8,11 @@ There is intentionally no hard-delete path. Assets retire and history remains.
 """
 
 import uuid
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import UTC, datetime
 
+from app.core import evidence as E
 from app.core.database import get_db
 from app.core.evidence_broker import capture_observation
-from app.core import evidence as E
 
 ASSET_TYPES = ("asic", "gpu", "power", "storage", "treasury")
 ACTIVE = "active"
@@ -37,7 +36,7 @@ _PATCHABLE = {
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _clean_number(value, default=0.0) -> float:
@@ -46,7 +45,7 @@ def _clean_number(value, default=0.0) -> float:
     return float(value)
 
 
-def normalize_asset(payload: Dict, *, existing: Optional[Dict] = None) -> Dict:
+def normalize_asset(payload: dict, *, existing: dict | None = None) -> dict:
     """Validate + normalize an asset payload, optionally merging with a record."""
     base = dict(existing or {})
     merged = {**base, **{k: v for k, v in payload.items() if k in _PATCHABLE or k == "asset_type"}}
@@ -63,7 +62,7 @@ def normalize_asset(payload: Dict, *, existing: Optional[Dict] = None) -> Dict:
     if units < 1:
         raise ValueError("units must be >= 1")
 
-    doc: Dict = {
+    doc: dict = {
         "asset_type": asset_type,
         "name": merged.get("name") or merged.get("subject") or asset_type,
         "subject": merged.get("subject") or merged.get("name") or asset_type,
@@ -99,14 +98,14 @@ def normalize_asset(payload: Dict, *, existing: Optional[Dict] = None) -> Dict:
     return doc
 
 
-def _public(doc: Dict) -> Dict:
+def _public(doc: dict) -> dict:
     out = dict(doc)
     raw_id = out.pop("_id", None)
     out["asset_id"] = out.get("asset_id") or raw_id
     return out
 
 
-def _fact_value_and_unit(doc: Dict) -> tuple[float, str]:
+def _fact_value_and_unit(doc: dict) -> tuple[float, str]:
     asset_type = doc["asset_type"]
     if doc.get("status") == RETIRED:
         return 0.0, "retired"
@@ -122,7 +121,7 @@ def _fact_value_and_unit(doc: Dict) -> tuple[float, str]:
     return float(doc.get("value_usd", 0.0)), "usd"
 
 
-async def _fleet_fact(doc: Dict, _db=None) -> str:
+async def _fleet_fact(doc: dict, _db=None) -> str:
     value, unit = _fact_value_and_unit(doc)
     extra = {
         "asset_id": doc["asset_id"],
@@ -158,7 +157,7 @@ async def _fleet_fact(doc: Dict, _db=None) -> str:
     )
 
 
-async def create_asset(payload: Dict, user_id: str, _db=None) -> Dict:
+async def create_asset(payload: dict, user_id: str, _db=None) -> dict:
     db = _db or get_db()
     normalized = normalize_asset(payload)
     asset_id = str(uuid.uuid4())
@@ -176,7 +175,7 @@ async def create_asset(payload: Dict, user_id: str, _db=None) -> Dict:
     return _public(doc)
 
 
-async def import_assets(payload: Dict, user_id: str, _db=None) -> Dict:
+async def import_assets(payload: dict, user_id: str, _db=None) -> dict:
     items = payload.get("assets", [])
     if not isinstance(items, list):
         raise ValueError("assets must be a list")
@@ -192,13 +191,13 @@ async def import_assets(payload: Dict, user_id: str, _db=None) -> Dict:
     return {"created": created, "errors": errors, "created_count": len(created)}
 
 
-async def get_asset(asset_id: str, user_id: str, _db=None) -> Optional[Dict]:
+async def get_asset(asset_id: str, user_id: str, _db=None) -> dict | None:
     db = _db or get_db()
     doc = await db.assets.find_one({"_id": asset_id, "user_id": user_id})
     return _public(doc) if doc else None
 
 
-async def update_asset(asset_id: str, payload: Dict, user_id: str, _db=None) -> Optional[Dict]:
+async def update_asset(asset_id: str, payload: dict, user_id: str, _db=None) -> dict | None:
     db = _db or get_db()
     current = await db.assets.find_one({"_id": asset_id, "user_id": user_id})
     if not current:
@@ -222,28 +221,28 @@ async def update_asset(asset_id: str, payload: Dict, user_id: str, _db=None) -> 
     return _public(next_doc)
 
 
-async def retire_asset(asset_id: str, user_id: str, _db=None) -> Optional[Dict]:
+async def retire_asset(asset_id: str, user_id: str, _db=None) -> dict | None:
     return await update_asset(asset_id, {"status": RETIRED}, user_id, _db)
 
 
-async def reactivate_asset(asset_id: str, user_id: str, _db=None) -> Optional[Dict]:
+async def reactivate_asset(asset_id: str, user_id: str, _db=None) -> dict | None:
     return await update_asset(asset_id, {"status": ACTIVE}, user_id, _db)
 
 
-async def list_assets(user_id: str, _db=None, active_only: bool = False) -> List[Dict]:
+async def list_assets(user_id: str, _db=None, active_only: bool = False) -> list[dict]:
     db = _db or get_db()
-    query: Dict = {"user_id": user_id}
+    query: dict = {"user_id": user_id}
     if active_only:
         query["status"] = ACTIVE
     cursor = db.assets.find(query).sort("created_at", -1)
     return [_public(doc) async for doc in cursor]
 
 
-async def fleet_summary(user_id: str, _db=None) -> Dict:
+async def fleet_summary(user_id: str, _db=None) -> dict:
     """Aggregate active assets and refresh their evidence snapshot if needed."""
     db = _db or get_db()
     assets = await list_assets(user_id, db, active_only=True)
-    summary: Dict = {
+    summary: dict = {
         "asics": {"units": 0, "hashrate_ths": 0.0, "power_kw": 0.0, "value_usd": 0.0, "models": []},
         "gpus": {"units": 0, "power_kw": 0.0, "value_usd": 0.0, "models": []},
         "power_mw": 0.0,

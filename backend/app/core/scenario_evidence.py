@@ -1,6 +1,5 @@
 """Canonical evidence facts for Capital stress/scenario vectors."""
 
-from typing import Dict, List
 
 from app.core import evidence as E
 from app.core.evidence_broker import capture_observation
@@ -9,23 +8,23 @@ from app.core.evidence_broker import capture_observation
 async def capture_scenario_vectors(
     *,
     user_id: str,
-    keys: List[str],
-    vectors: List[Dict],
-) -> Dict:
+    keys: list[str],
+    vectors: list[dict],
+) -> dict:
     """Persist the exact numeric shocks used by a scenario matrix.
 
     Scenario vectors are SIMULATION facts: they are deliberate hypothetical
     inputs, never observations. Stable built-in vector definitions may reuse a
     fresh canonical fact ID; every receipt still links to the facts it used.
     """
-    evidence_ids: List[str] = []
-    by_scenario: Dict[str, Dict] = {}
+    evidence_ids: list[str] = []
+    by_scenario: dict[str, dict] = {}
 
-    for key, vector in zip(keys, vectors):
+    for key, vector in zip(keys, vectors, strict=False):
         label = str(vector.get("label") or key)
-        scenario_facts: Dict[str, str] = {}
+        scenario_facts: dict[str, str] = {}
         for metric, raw_value in vector.items():
-            if metric == "label" or not isinstance(raw_value, (int, float)):
+            if metric == "label" or not isinstance(raw_value, int | float):
                 continue
             evidence_id = await capture_observation(
                 domain="capital",

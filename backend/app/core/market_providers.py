@@ -15,12 +15,13 @@ Honesty contract (see settings.MARKET_DATA_MODE):
          live truth.
 """
 
+import hashlib
 import random
-import httpx
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import UTC, datetime
+
+import httpx
 
 from app.core.config import settings
 from app.models.schemas import AssetClass
@@ -30,7 +31,7 @@ TWELVEDATA_URL = "https://api.twelvedata.com"
 PROVIDER_TIMEOUT = 8.0
 
 # symbol -> (coingecko id, display name, base demo price)
-CRYPTO_UNIVERSE: Dict[str, dict] = {
+CRYPTO_UNIVERSE: dict[str, dict] = {
     "BTC": {"id": "bitcoin", "name": "Bitcoin", "price": 61000.0},
     "ETH": {"id": "ethereum", "name": "Ethereum", "price": 3300.0},
     "SOL": {"id": "solana", "name": "Solana", "price": 150.0},
@@ -43,7 +44,7 @@ CRYPTO_UNIVERSE: Dict[str, dict] = {
     "MATIC": {"id": "matic-network", "name": "Polygon", "price": 0.82},
 }
 
-STOCK_UNIVERSE: Dict[str, dict] = {
+STOCK_UNIVERSE: dict[str, dict] = {
     "COIN": {"name": "Coinbase Global", "price": 230.0},
     "MSTR": {"name": "MicroStrategy", "price": 1450.0},
     "NVDA": {"name": "NVIDIA", "price": 980.0},
@@ -51,30 +52,75 @@ STOCK_UNIVERSE: Dict[str, dict] = {
     "MSFT": {"name": "Microsoft", "price": 420.0},
     "TSLA": {"name": "Tesla", "price": 240.0},
     "AMZN": {"name": "Amazon", "price": 185.0},
+    "GOOGL": {"name": "Alphabet", "price": 175.0},
+    "META": {"name": "Meta Platforms", "price": 500.0},
+    "NFLX": {"name": "Netflix", "price": 640.0},
+    "AMD": {"name": "Advanced Micro Devices", "price": 160.0},
+    "PLTR": {"name": "Palantir Technologies", "price": 25.0},
+    "SQ": {"name": "Block", "price": 65.0},
+    "HOOD": {"name": "Robinhood Markets", "price": 20.0},
 }
 
-ETF_UNIVERSE: Dict[str, dict] = {
+ETF_UNIVERSE: dict[str, dict] = {
     "SPY": {"name": "SPDR S&P 500 ETF", "price": 540.0},
     "QQQ": {"name": "Invesco QQQ Trust", "price": 470.0},
     "IWM": {"name": "iShares Russell 2000 ETF", "price": 205.0},
     "GLD": {"name": "SPDR Gold Shares", "price": 230.0},
     "TLT": {"name": "iShares 20+ Year Treasury ETF", "price": 95.0},
+    "ARKK": {"name": "ARK Innovation ETF", "price": 55.0},
+    "VTI": {"name": "Vanguard Total Stock Market ETF", "price": 260.0},
+    "EEM": {"name": "iShares MSCI Emerging Markets ETF", "price": 42.0},
 }
 
-MACRO_UNIVERSE: Dict[str, dict] = {
-    "DXY": {"name": "US Dollar Index", "price": 105.5},
+FOREX_UNIVERSE: dict[str, dict] = {
+    "EURUSD": {"name": "Euro / US Dollar", "price": 1.085},
+    "GBPUSD": {"name": "British Pound / US Dollar", "price": 1.270},
+    "USDJPY": {"name": "US Dollar / Japanese Yen", "price": 155.0},
+    "AUDUSD": {"name": "Australian Dollar / US Dollar", "price": 0.665},
+    "USDCAD": {"name": "US Dollar / Canadian Dollar", "price": 1.370},
+    "USDCHF": {"name": "US Dollar / Swiss Franc", "price": 0.910},
+}
+
+COMMODITY_UNIVERSE: dict[str, dict] = {
     "XAUUSD": {"name": "Gold / USD", "price": 2380.0},
+    "XAGUSD": {"name": "Silver / USD", "price": 29.0},
+    "WTI": {"name": "Crude Oil (WTI)", "price": 78.0},
+}
+
+MACRO_UNIVERSE: dict[str, dict] = {
+    "DXY": {"name": "US Dollar Index", "price": 105.5},
+    "BTC_DOM": {"name": "BTC Dominance", "price": 52.0},
     "US10Y": {"name": "US 10-Year Yield", "price": 4.3},
+    "VIX": {"name": "CBOE Volatility Index", "price": 15.0},
+}
+
+DEFI_UNIVERSE: dict[str, dict] = {
+    "UNI": {"id": "uniswap", "name": "Uniswap", "price": 9.5},
+    "AAVE": {"id": "aave", "name": "Aave", "price": 95.0},
+    "LDO": {"id": "lido-dao", "name": "Lido DAO", "price": 2.4},
+    "CRV": {"id": "curve-dao-token", "name": "Curve DAO", "price": 0.82},
+    "MKR": {"id": "maker", "name": "Maker", "price": 2600.0},
+    "COMP": {"id": "compound-governance-token", "name": "Compound", "price": 55.0},
+    "SUSHI": {"id": "sushi", "name": "Sushi", "price": 1.15},
+    "SNX": {"id": "synthetix-network-token", "name": "Synthetix", "price": 3.1},
+    "PERP": {"id": "perpetual-protocol", "name": "Perpetual Protocol", "price": 0.95},
+    "GMX": {"id": "gmx", "name": "GMX", "price": 42.0},
 }
 
 
-def universe_for(asset_class: AssetClass) -> Dict[str, dict]:
+def universe_for(asset_class: AssetClass) -> dict[str, dict]:
     if asset_class == AssetClass.STOCK:
         return STOCK_UNIVERSE
     if asset_class == AssetClass.ETF:
         return ETF_UNIVERSE
+    if asset_class == AssetClass.FOREX:
+        return FOREX_UNIVERSE
+    if asset_class == AssetClass.COMMODITY:
+        return COMMODITY_UNIVERSE
     if asset_class == AssetClass.MACRO:
         return MACRO_UNIVERSE
+    if asset_class == AssetClass.DEFI:
+        return DEFI_UNIVERSE
     return CRYPTO_UNIVERSE
 
 
@@ -87,20 +133,20 @@ class NormalizedQuote:
     provider: str
     source: str
     observed_at: datetime
-    change_24h: Optional[float] = None
-    change_7d: Optional[float] = None
-    change_30d: Optional[float] = None
-    volume_24h: Optional[float] = None
-    market_cap: Optional[float] = None
-    high_24h: Optional[float] = None
-    low_24h: Optional[float] = None
+    change_24h: float | None = None
+    change_7d: float | None = None
+    change_30d: float | None = None
+    volume_24h: float | None = None
+    market_cap: float | None = None
+    high_24h: float | None = None
+    low_24h: float | None = None
 
 
 class QuoteProvider(ABC):
     provider_id: str = "abstract"
 
     @abstractmethod
-    async def quotes(self, symbols: List[str], asset_class: AssetClass) -> List[NormalizedQuote]:
+    async def quotes(self, symbols: list[str], asset_class: AssetClass) -> list[NormalizedQuote]:
         """Fetch quotes. Never raise; omit symbols that cannot be fetched."""
 
 
@@ -114,10 +160,11 @@ class CoinGeckoProvider(QuoteProvider):
             else {}
         )
 
-    async def quotes(self, symbols: List[str], asset_class: AssetClass) -> List[NormalizedQuote]:
-        if asset_class != AssetClass.CRYPTO:
+    async def quotes(self, symbols: list[str], asset_class: AssetClass) -> list[NormalizedQuote]:
+        if asset_class not in (AssetClass.CRYPTO, AssetClass.DEFI):
             return []
-        ids = [CRYPTO_UNIVERSE[s]["id"] for s in symbols if s in CRYPTO_UNIVERSE]
+        universe = universe_for(asset_class)
+        ids = [universe[s]["id"] for s in symbols if s in universe]
         if not ids:
             return []
         try:
@@ -138,10 +185,10 @@ class CoinGeckoProvider(QuoteProvider):
         except Exception:
             return []
 
-        now = datetime.now(timezone.utc)
-        out: List[NormalizedQuote] = []
+        now = datetime.now(UTC)
+        out: list[NormalizedQuote] = []
         for sym in symbols:
-            meta = CRYPTO_UNIVERSE.get(sym)
+            meta = universe.get(sym)
             if not meta:
                 continue
             coin = raw.get(meta["id"])
@@ -181,8 +228,24 @@ class TwelveDataProvider(QuoteProvider):
 
     _MACRO_MAP = {
         "DXY": "DXY",
-        "XAUUSD": "XAU/USD",
         "US10Y": "US10Y",
+        "VIX": "VIX",
+        "BTC_DOM": "BTC.D",
+    }
+
+    _FOREX_MAP = {
+        "EURUSD": "EUR/USD",
+        "GBPUSD": "GBP/USD",
+        "USDJPY": "USD/JPY",
+        "AUDUSD": "AUD/USD",
+        "USDCAD": "USD/CAD",
+        "USDCHF": "USD/CHF",
+    }
+
+    _COMMODITY_MAP = {
+        "XAUUSD": "XAU/USD",
+        "XAGUSD": "XAG/USD",
+        "WTI": "WTI",
     }
 
     def __init__(self) -> None:
@@ -191,14 +254,18 @@ class TwelveDataProvider(QuoteProvider):
     def _provider_symbol(self, symbol: str, asset_class: AssetClass) -> str:
         if asset_class == AssetClass.MACRO:
             return self._MACRO_MAP.get(symbol, symbol)
+        if asset_class == AssetClass.FOREX:
+            return self._FOREX_MAP.get(symbol, symbol)
+        if asset_class == AssetClass.COMMODITY:
+            return self._COMMODITY_MAP.get(symbol, symbol)
         return symbol
 
-    async def quotes(self, symbols: List[str], asset_class: AssetClass) -> List[NormalizedQuote]:
+    async def quotes(self, symbols: list[str], asset_class: AssetClass) -> list[NormalizedQuote]:
         if asset_class == AssetClass.CRYPTO or not self._api_key:
             return []
         universe = universe_for(asset_class)
-        out: List[NormalizedQuote] = []
-        now = datetime.now(timezone.utc)
+        out: list[NormalizedQuote] = []
+        now = datetime.now(UTC)
         try:
             async with httpx.AsyncClient(timeout=PROVIDER_TIMEOUT) as client:
                 for sym in symbols:
@@ -240,7 +307,7 @@ class TwelveDataProvider(QuoteProvider):
         return out
 
     @staticmethod
-    def _to_float(v) -> Optional[float]:
+    def _to_float(v) -> float | None:
         try:
             if v in (None, "", "-", "--"):
                 return None
@@ -252,10 +319,10 @@ class TwelveDataProvider(QuoteProvider):
 class DemoProvider(QuoteProvider):
     provider_id = "demo"
 
-    async def quotes(self, symbols: List[str], asset_class: AssetClass) -> List[NormalizedQuote]:
+    async def quotes(self, symbols: list[str], asset_class: AssetClass) -> list[NormalizedQuote]:
         universe = universe_for(asset_class)
-        now = datetime.now(timezone.utc)
-        out: List[NormalizedQuote] = []
+        now = datetime.now(UTC)
+        out: list[NormalizedQuote] = []
         for sym in symbols:
             meta = universe.get(sym) or {"name": sym, "price": 100.0}
             drift = random.uniform(-0.035, 0.035)
@@ -292,14 +359,20 @@ class ProviderRegistry:
         Demo quotes keep source="demo" so they can never look live."""
         self._force_demo = enabled
 
-    def providers_for(self, asset_class: AssetClass) -> List[QuoteProvider]:
+    def providers_for(self, asset_class: AssetClass) -> list[QuoteProvider]:
         if self._force_demo or settings.MARKET_DATA_MODE == "demo":
             return [self._demo]
 
         # live mode: real providers only, missing data stays missing.
-        if asset_class == AssetClass.CRYPTO:
+        if asset_class in (AssetClass.CRYPTO, AssetClass.DEFI):
             return [self._crypto]
-        if asset_class in (AssetClass.STOCK, AssetClass.ETF, AssetClass.MACRO):
+        if asset_class in (
+            AssetClass.STOCK,
+            AssetClass.ETF,
+            AssetClass.MACRO,
+            AssetClass.FOREX,
+            AssetClass.COMMODITY,
+        ):
             return [self._securities] if self._securities else []
         return []
 
@@ -309,12 +382,12 @@ class ProviderRegistry:
         return await self._crypto.global_market()
 
     async def get_quotes(
-        self, symbols: List[str], asset_class: AssetClass
-    ) -> Dict[str, NormalizedQuote]:
+        self, symbols: list[str], asset_class: AssetClass
+    ) -> dict[str, NormalizedQuote]:
         """Fetch quotes from the mode-locked provider chain. No cross-provider
         fallback: a symbol that fails stays absent so the caller can decide
         how honestly to report the gap."""
-        seen: Dict[str, NormalizedQuote] = {}
+        seen: dict[str, NormalizedQuote] = {}
         for provider in self.providers_for(asset_class):
             for q in await provider.quotes(symbols, asset_class):
                 seen.setdefault(q.symbol, q)
@@ -322,3 +395,63 @@ class ProviderRegistry:
 
 
 market_providers = ProviderRegistry()
+
+
+# Per-symbol factor betas for the demo price series. Positive beta rides the
+# shared market factor (risk-on), negative beta rides it inversely (risk-off /
+# defensive). Coherent betas give the demo correlation radar plausible signs.
+_DEMO_FACTOR_BETAS: dict[str, float] = {
+    # risk assets (high beta)
+    "BTC": 1.1, "ETH": 1.0, "SOL": 0.9,
+    "COIN": 1.2, "MSTR": 1.3, "NVDA": 1.0, "TSLA": 1.0, "AMD": 1.1,
+    "PLTR": 1.1, "SQ": 1.0, "HOOD": 1.1, "META": 1.0, "AMZN": 0.9,
+    "AAPL": 0.8, "MSFT": 0.8, "GOOGL": 0.9, "NFLX": 0.8,
+    "QQQ": 0.9, "SPY": 0.7, "IWM": 0.7, "ARKK": 1.1, "VTI": 0.7,
+    "EEM": 0.6, "AUDUSD": 0.7, "WTI": 0.6,
+    # DeFi tokens track the crypto risk factor closely
+    "UNI": 1.2, "AAVE": 1.1, "LDO": 1.2, "CRV": 1.1, "MKR": 0.9,
+    "COMP": 1.1, "SUSHI": 1.2, "SNX": 1.1, "PERP": 0.9, "GMX": 1.0,
+    # moderately positive
+    "EURUSD": 0.5, "GBPUSD": 0.4, "XAUUSD": 0.35, "XAGUSD": 0.6,
+    # defensive / safe havens (inverse beta)
+    "TLT": -0.6, "DXY": -0.7, "VIX": -0.8, "USDJPY": -0.3,
+    "USDCAD": -0.3, "USDCHF": -0.4, "US10Y": 0.2, "BTC_DOM": 0.2,
+}
+
+# Cached deterministic market factor (shared across all symbols). A mild
+# positive drift keeps the demo scenario coherent (risk-on bias): risk assets
+# tend upward while inverse-beta names (TLT/DXY/VIX) drift down, so the regime
+# engine sees a plausible, stable cross-asset picture rather than noise.
+_DEMO_MARKET_FACTOR: dict[int, list[float]] = {}
+
+
+def _demo_market_factor(points: int) -> list[float]:
+    cached = _DEMO_MARKET_FACTOR.get(points)
+    if cached is None:
+        rng = random.Random(int(hashlib.sha256(b"hf-demo-market-factor").hexdigest()[:8], 16))
+        cached = [rng.gauss(0.0009, 0.007) for _ in range(points)]
+        _DEMO_MARKET_FACTOR[points] = cached
+    return cached
+
+
+def demo_price_series(symbol: str, asset_class: AssetClass, points: int = 90) -> list[float]:
+    """Deterministic synthetic price series with plausible cross-asset structure.
+
+    Every symbol loads a shared market factor (fixed, seeded per window
+    length) plus per-symbol idiosyncratic noise. Betas assign sign/direction
+    so inverse relationships (TLT/bonds, DXY, VIX) come out negative against
+    risk assets. Seeded by symbol+class so a given series is stable across
+    calls. Demo/simulated — never presented as live measurement.
+    """
+    meta = universe_for(asset_class).get(symbol) or {"price": 100.0}
+    base = meta["price"]
+    beta = _DEMO_FACTOR_BETAS.get(symbol, 0.5)
+    seed = int(hashlib.sha256(f"{asset_class.value}:{symbol}:series".encode()).hexdigest()[:8], 16)
+    rng = random.Random(seed)
+    factor = _demo_market_factor(points)
+    series: list[float] = []
+    price = base
+    for i in range(points):
+        price = max(price * (1.0 + beta * factor[i] + rng.gauss(0.0, 0.005)), 0.00000001)
+        series.append(round(price, 6 if price < 1 else 2))
+    return series

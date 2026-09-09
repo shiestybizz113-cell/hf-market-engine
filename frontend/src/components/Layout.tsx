@@ -7,6 +7,7 @@ import {
   LogOut, Search, Landmark
 } from 'lucide-react'
 import { getHealth, getOverview } from '../services/api'
+import DataModeBanner from './DataModeBanner'
 
 const nav = [
   { section: 'Markets', items: [
@@ -14,7 +15,10 @@ const nav = [
     { to: '/crypto', label: 'Crypto', icon: CandlestickChart },
     { to: '/stocks', label: 'Stocks', icon: CandlestickChart },
     { to: '/etfs', label: 'ETFs', icon: CandlestickChart },
+    { to: '/forex', label: 'Forex', icon: CandlestickChart },
+    { to: '/commodities', label: 'Commodities', icon: CandlestickChart },
     { to: '/macro', label: 'Macro', icon: Activity },
+    { to: '/defi', label: 'DeFi', icon: CandlestickChart },
     { to: '/watchlist', label: 'Watchlist', icon: Eye },
   ]},
   { section: 'Intelligence', items: [
@@ -124,6 +128,7 @@ export default function Layout() {
       </aside>
 
       <div className="main">
+        <DataModeBanner />
         <header className="topbar">
           <div className="flex gap-12" style={{ alignItems: 'center' }}>
             <form onSubmit={onSearch} className="flex gap-4" style={{ alignItems: 'center' }}>

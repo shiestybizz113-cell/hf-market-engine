@@ -10,28 +10,29 @@ Dev without Stripe:
   POST /api/billing/dev-downgrade
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Header
-from typing import Optional
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from pydantic import BaseModel
+
 from app.api.auth import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.plans import (
-    catalog_public,
-    PLAN_CATALOG,
     FEATURE_MIN_PLAN,
-    has_feature,
+    PLAN_CATALOG,
     ai_reviews_remaining,
+    catalog_public,
+    has_feature,
 )
-from pydantic import BaseModel
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
 
 class CheckoutRequest(BaseModel):
     plan_id: str
-    success_url: Optional[str] = None
-    cancel_url: Optional[str] = None
+    success_url: str | None = None
+    cancel_url: str | None = None
 
 
 class DevUpgradeRequest(BaseModel):
@@ -173,7 +174,7 @@ async def create_checkout(payload: CheckoutRequest, current_user=Depends(get_cur
 @router.post("/webhook")
 async def stripe_webhook(
     request: Request,
-    stripe_signature: Optional[str] = Header(None, alias="Stripe-Signature"),
+    stripe_signature: str | None = Header(None, alias="Stripe-Signature"),
 ):
     if not settings.STRIPE_WEBHOOK_SECRET:
         raise HTTPException(503, "STRIPE_WEBHOOK_SECRET not configured")
@@ -202,7 +203,7 @@ async def stripe_webhook(
                     "$set": {
                         "plan": plan_id,
                         "stripe_subscription_id": sub_id,
-                        "plan_updated_at": datetime.now(timezone.utc),
+                        "plan_updated_at": datetime.now(UTC),
                     }
                 },
             )
@@ -221,7 +222,7 @@ async def stripe_webhook(
                 {
                     "$set": {
                         "plan": "free",
-                        "plan_updated_at": datetime.now(timezone.utc),
+                        "plan_updated_at": datetime.now(UTC),
                     }
                 },
             )
@@ -245,7 +246,7 @@ async def dev_upgrade(payload: DevUpgradeRequest, current_user=Depends(get_curre
         {
             "$set": {
                 "plan": plan_id,
-                "plan_updated_at": datetime.now(timezone.utc),
+                "plan_updated_at": datetime.now(UTC),
             }
         },
     )
@@ -264,7 +265,7 @@ async def dev_downgrade(current_user=Depends(get_current_user)):
         {
             "$set": {
                 "plan": "free",
-                "plan_updated_at": datetime.now(timezone.utc),
+                "plan_updated_at": datetime.now(UTC),
             }
         },
     )

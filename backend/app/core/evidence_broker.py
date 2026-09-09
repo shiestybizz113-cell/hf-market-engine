@@ -8,8 +8,7 @@ Responsibilities:
 3. roll resolutions into per-lane evidence blocks for Capital receipts/UI.
 """
 
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import UTC, datetime
 
 from app.core import evidence as E
 
@@ -26,14 +25,14 @@ async def capture_observation(
     state: str,
     provider: str,
     source_type: str,
-    source_reference: Optional[str] = None,
-    observed_at: Optional[datetime] = None,
-    region: Optional[str] = None,
-    confidence: Optional[float] = None,
-    methodology: Optional[str] = None,
-    user_id: Optional[str] = None,
-    raw_snapshot_ref: Optional[str] = None,
-    extra: Optional[Dict] = None,
+source_reference: str | None = None,
+    observed_at: datetime | None = None,
+    region: str | None = None,
+    confidence: float | None = None,
+    methodology: str | None = None,
+    user_id: str | None = None,
+    raw_snapshot_ref: str | None = None,
+    extra: dict | None = None,
     _db=None,
 ) -> str:
     """Persist an observation, deduping only against the latest fact.
@@ -101,16 +100,17 @@ async def resolve_metric(
     domain: str,
     metric: str,
     subject_id: str,
-    user_id: Optional[str],
-    explicit_value: Optional[float] = None,
-    explicit_unit: Optional[str] = None,
+    user_id: str | None,
+    explicit_value: float | None = None,
+    explicit_unit: str | None = None,
     explicit_provider: str = "user_input",
     explicit_source_type: str = "user_input",
-    explicit_methodology: Optional[str] = None,
-    explicit_extra: Optional[Dict] = None,
+    explicit_methodology: str | None = None,
+    explicit_extra: dict | None = None,
     _db=None,
-) -> Dict:
-    """Resolve a metric to its best current fact and preserve the full trace.
+) -> dict:
+    """Resolve a metric to its best fact, persisting an explicit operator
+    override as a user_assumption fact when supplied.
 
     Fresh facts are preferred as a class. Only when no fresh fact exists do we
     resolve from stale history, which allows the caller to surface STALE rather
@@ -156,20 +156,20 @@ async def lane_evidence(
     *,
     lane_key: str,
     label: str,
-    resolutions: Dict[str, Dict],
-) -> Dict:
-    """Roll metric resolutions into a lane evidence block.
+    resolutions: dict[str, dict],
+) -> dict:
+    """Roll metric resolutions into a lane evidence block for the receipt.
 
     Quality is deliberately conservative. Any user assumption/simulation makes
     a lane PARTIAL unless a stronger condition (STALE/CONFLICTING/UNAVAILABLE)
     applies. This prevents a live BTC quote from making an assumption-heavy GPU
     or energy model look fully observed.
     """
-    facts_used: List[str] = []
-    assumptions_used: List[str] = []
-    facts_missing: List[str] = []
-    facts_stale: List[str] = []
-    metrics: Dict[str, Dict] = {}
+    facts_used: list[str] = []
+    assumptions_used: list[str] = []
+    facts_missing: list[str] = []
+    facts_stale: list[str] = []
+    metrics: dict[str, dict] = {}
 
     state_counts = {
         E.OBSERVED_LIVE: 0,
@@ -267,4 +267,4 @@ async def lane_evidence(
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

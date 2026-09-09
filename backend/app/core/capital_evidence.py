@@ -8,8 +8,8 @@ The engine never needs to know how a price was sourced; this module makes sure
 the value handed to it is the same value referenced by the evidence receipt.
 """
 
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from app.core import evidence as E
 from app.core.assets import fleet_summary
@@ -22,13 +22,13 @@ from app.core.infrastructure_data import (
 
 
 def _now():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 async def _assumption(
-    *, user_id: str, domain: str, metric: str, value: Optional[float], unit: str,
-    subject_id: str = "operator", methodology: str, extra: Optional[Dict] = None,
-) -> Dict:
+    *, user_id: str, domain: str, metric: str, value: float | None, unit: str,
+    subject_id: str = "operator", methodology: str, extra: dict | None = None,
+) -> dict:
     if value is None:
         return await resolve_metric(
             domain=domain, metric=metric, subject_id=subject_id, user_id=user_id,
@@ -47,14 +47,14 @@ async def _assumption(
 
 async def prepare_capital_evidence(
     *,
-    data: Dict[str, Any],
+    data: dict[str, Any],
     user_id: str,
     network,
     live_btc_price: float,
-    provenance: Dict,
+    provenance: dict,
     simulation: bool,
-    asic: Dict,
-) -> Dict:
+    asic: dict,
+) -> dict:
     """Resolve all economically material inputs and return engine overrides.
 
     User/operator state is recorded too, but lane quality focuses on the facts
@@ -381,10 +381,10 @@ async def prepare_capital_evidence(
     evidence_ids.extend(owned.get("evidence_ids", []))
     evidence_ids = list(dict.fromkeys(evidence_ids))
 
-    total_observed = sum(l["state_counts"].get(E.OBSERVED_LIVE, 0) for l in lanes.values())
+    total_observed = sum(lane["state_counts"].get(E.OBSERVED_LIVE, 0) for lane in lanes.values())
     total_assumed = sum(
-        l["state_counts"].get(E.USER_ASSUMPTION, 0) + l["state_counts"].get(E.SIMULATION, 0)
-        for l in lanes.values()
+        lane["state_counts"].get(E.USER_ASSUMPTION, 0) + lane["state_counts"].get(E.SIMULATION, 0)
+        for lane in lanes.values()
     )
     denominator = total_observed + total_assumed
     overall_observed_pct = round(total_observed / denominator * 100.0, 1) if denominator else 0.0
@@ -412,14 +412,14 @@ async def prepare_capital_evidence(
         "quality": {
             "overall_observed_pct": overall_observed_pct,
             "overall_assumption_pct": overall_assumption_pct,
-            "conflict_count": sum(l.get("conflict_count", 0) for l in lanes.values()),
-            "stale_count": sum(len(l.get("facts_stale", [])) for l in lanes.values()),
-            "missing_count": sum(len(l.get("facts_missing", [])) for l in lanes.values()),
+            "conflict_count": sum(lane.get("conflict_count", 0) for lane in lanes.values()),
+            "stale_count": sum(len(lane.get("facts_stale", [])) for lane in lanes.values()),
+            "missing_count": sum(len(lane.get("facts_missing", [])) for lane in lanes.values()),
         },
     }
 
 
-def apply_evidence_to_result(result: Dict, prepared: Dict) -> Dict:
+def apply_evidence_to_result(result: dict, prepared: dict) -> dict:
     """Attach lane evidence to a deterministic engine result without hiding it."""
     result["evidence"] = {
         "evidence_ids": prepared["evidence_ids"],

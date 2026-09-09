@@ -1,19 +1,67 @@
-"""Shared request-rate limiting for public deployment.
+"""
+Rate limiting — two complementary layers.
 
-Production uses Redis so all Uvicorn workers see the same counters. Development
-fails open when Redis is unavailable so local work does not require the cache.
-The limiter never stores request bodies, tokens, email addresses, or evidence.
+SlowAPI (auth endpoints, fail-closed by design):
+  POST /api/auth/login    → 10 requests / minute / IP
+  POST /api/auth/register → 5  requests / minute / IP
+
+  Both limits are intentionally asymmetric: registration is more expensive
+  (DB write, bcrypt hash) and lower-volume by nature. Login gets 10 to
+  accommodate power users but is still well below brute-force thresholds.
+  Changing limits: update LOGIN_LIMIT and REGISTER_LIMIT strings below.
+  Format: "{count} per {period}" — e.g. "20 per minute", "100 per hour".
+
+  Redis backend: when REDIS_URL is configured, limits survive restarts and
+  are shared across workers. Falls back to in-process memory only in dev.
+
+Public edge (shared read-only product; fail-open on Redis outage):
+  Production uses Redis so all Uvicorn workers see the same counters.
+  Development fails open when Redis is unavailable so local work does not
+  require the cache. The limiter never stores request bodies, tokens, email
+  addresses, or evidence.
 """
 
 import hashlib
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 from fastapi import Request
+from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from app.core.config import settings
+
+# ── SlowAPI (auth endpoints) ─────────────────────────────────────────────────
+
+LOGIN_LIMIT = "10 per minute"
+REGISTER_LIMIT = "5 per minute"
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=[],
+)
+
+
+def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    """
+    Return a clean 429 with Retry-After so clients and monitoring know
+    exactly how long to back off. Never silently swallow the error.
+    """
+    retry_after = getattr(exc, "retry_after", 60)
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": "Too many requests. Please slow down.",
+            "retry_after_seconds": retry_after,
+        },
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+# ── Public edge (shared rate limits) ─────────────────────────────────────────
 
 
 @dataclass(frozen=True)
@@ -34,7 +82,7 @@ ROUTE_LIMITS = {
 }
 DEFAULT_API_LIMIT = Limit(180, 60)
 
-_redis: Optional[Redis] = None
+_redis: Redis | None = None
 
 
 def _client() -> Redis:
@@ -54,7 +102,7 @@ def _identity(request: Request) -> str:
     edge_ip = request.headers.get("x-real-ip", "").strip()
     ip = edge_ip or (request.client.host if request.client else "unknown")
     auth = request.headers.get("authorization", "")
-    material = f"{ip}|{auth[:80]}".encode("utf-8")
+    material = f"{ip}|{auth[:80]}".encode()
     return hashlib.sha256(material).hexdigest()[:24]
 
 

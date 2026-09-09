@@ -1,6 +1,6 @@
 """Capital V2 infrastructure data + operator asset APIs."""
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -24,9 +24,9 @@ async def hardware_offers(current_user=Depends(get_current_user)):
 
 @router.get("/compute/offers")
 async def compute_offers(
-    model: Optional[str] = Query(default=None),
-    region: Optional[str] = Query(default=None),
-    billing_model: Optional[str] = Query(default=None),
+    model: str | None = Query(default=None),
+    region: str | None = Query(default=None),
+    billing_model: str | None = Query(default=None),
     current_user=Depends(get_current_user),
 ):
     return scrub_public_sources(await list_compute_offers(
@@ -36,7 +36,7 @@ async def compute_offers(
 
 @router.get("/energy/prices")
 async def energy_prices(
-    region: Optional[str] = Query(default=None),
+    region: str | None = Query(default=None),
     current_user=Depends(get_current_user),
 ):
     return scrub_public_sources(await list_energy_prices(current_user["_id"], region=region))
@@ -45,7 +45,7 @@ async def energy_prices(
 # Persistent operator/fleet state is the Advanced+ fleet-modeling entitlement.
 @router.post("/assets", status_code=201)
 async def create_asset(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     current_user=Depends(require_feature("mining_fleet")),
 ):
     try:
@@ -71,7 +71,7 @@ async def asset_summary(current_user=Depends(require_feature("mining_fleet"))):
 @router.patch("/assets/{asset_id}")
 async def patch_asset(
     asset_id: str,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     current_user=Depends(require_feature("mining_fleet")),
 ):
     try:
@@ -85,7 +85,7 @@ async def patch_asset(
 
 @router.post("/assets/import")
 async def import_assets(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     current_user=Depends(require_feature("mining_fleet")),
 ):
     try:

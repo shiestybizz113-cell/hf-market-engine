@@ -7,7 +7,7 @@ import {
 import {
   createAsset, getAssetSummary, getAssets, getBillingMe, getComputeOffers,
   getEnergyPrices, getEvidenceGraph, getHardwareOffers, retireAsset,
-  runCapitalAllocation, runCapitalOptimize, runCapitalScenarios,
+  runCapitalAllocation, runCapitalOptimize, runCapitalRiskGrid, runCapitalScenarios,
 } from '../services/api'
 
 const RISK_PROFILES = ['conservative', 'balanced', 'aggressive']
@@ -19,6 +19,16 @@ const SCENARIOS = [
 ] as const
 const ASIC_MODELS = ['S21 Pro', 'S21', 'S19k Pro', 'S19 Pro', 'M60S', 'M66S', 'A1566', 'A1366', 'Bitaxe Max']
 const GPU_MODELS = ['H100', 'H200', 'B200', 'A100', 'L40S', '4090']
+
+const RISK_GRID_DIMS: [string, number, number, number][] = [
+  ['btc_price_shift_pct', -50, 50, 7],
+  ['electricity_usd_kwh', 0.01, 0.25, 5],
+  ['difficulty_growth_pct_year', 0, 100, 5],
+  ['uptime_pct', 60, 99, 4],
+  ['gpu_rental_usd_per_hr', 0, 5, 4],
+  ['gpu_utilization_pct', 30, 98, 4],
+  ['cash_interest_rate_pct_year', 0, 15, 4],
+]
 
 const LANE_META: Record<string, { label: string; icon: any }> = {
   btc: { label: 'BTC Treasury', icon: Bitcoin },
@@ -85,10 +95,11 @@ export default function Capital() {
     difficulty_growth_pct_year: 20,
     cash_interest_rate_pct_year: 4,
   })
-  const [tab, setTab] = useState<'run' | 'scenarios' | 'optimize'>('run')
+  const [tab, setTab] = useState<'run' | 'scenarios' | 'optimize' | 'riskgrid'>('run')
   const [run, setRun] = useState<any>(null)
   const [matrix, setMatrix] = useState<any>(null)
   const [optimize, setOptimize] = useState<any>(null)
+  const [riskgrid, setRiskgrid] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [proof, setProof] = useState<any>(null)
@@ -143,6 +154,13 @@ export default function Capital() {
       } else if (tab === 'scenarios') {
         const r = await runCapitalScenarios({ run: form, vectors: SCENARIOS.map(s => s[0]) })
         setMatrix(r.data)
+      } else if (tab === 'riskgrid') {
+        const grid = RISK_GRID_DIMS.reduce((acc: any, [key, min, max, steps]) => {
+          acc[key] = { min, max, steps }
+          return acc
+        }, {})
+        const r = await runCapitalRiskGrid({ run: form, grid, joint: false })
+        setRiskgrid(r.data)
       } else {
         const r = await runCapitalOptimize({ ...form, risk_profiles: RISK_PROFILES })
         setOptimize(r.data)
@@ -229,9 +247,9 @@ export default function Capital() {
         <div className="panel-header">
           <span className="panel-title"><Layers size={14} /> Capital scenario</span>
           <div className="flex gap-8">
-            {(['run', 'scenarios', 'optimize'] as const).map(t => <button key={t}
+            {(['run', 'scenarios', 'optimize', 'riskgrid'] as const).map(t => <button key={t}
               className={`btn btn-sm ${tab === t ? 'btn-primary' : ''}`} onClick={() => setTab(t)}>
-              {t === 'run' ? 'Evaluate' : t === 'scenarios' ? 'Scenario matrix' : 'Optimize'}
+              {t === 'run' ? 'Evaluate' : t === 'scenarios' ? 'Scenario matrix' : t === 'optimize' ? 'Optimize' : 'Risk surface'}
             </button>)}
           </div>
         </div>
@@ -257,6 +275,7 @@ export default function Capital() {
 
       {tab === 'run' && run && <CapitalRunView run={run} openProof={openProof} />}
       {tab === 'scenarios' && matrix && <ScenarioView matrix={matrix} openProof={openProof} />}
+      {tab === 'riskgrid' && riskgrid && <RiskGridSurface grid={riskgrid} openProof={openProof} />}
       {tab === 'optimize' && optimize && <OptimizeView optimize={optimize} openProof={openProof} />}
       {proof && <ProofDrawer proof={proof} close={() => setProof(null)} />}
     </div>
@@ -420,6 +439,56 @@ function ScenarioView({ matrix, openProof }: any) {
       {matrix.matrix.map((m: any) => <tr key={m.label}><td>{m.label}</td><td>{fmtUsd(m.lanes.btc?.horizon_value)}</td><td>{fmtUsd(m.lanes.mining?.operating_profit_month)}</td><td>{fmtUsd(m.lanes.gpu?.operating_profit_month)}</td><td>{fmtUsd(m.lanes.energy?.operating_profit_month)}</td><td>{m.owned_fleet_accounted ? 'included' : '—'}</td></tr>)}
     </tbody></table></div><p className="muted mt-8" style={{ fontSize: 10 }}>{matrix.disclaimer}</p>
   </div>
+}
+
+function RiskGridSurface({ grid, openProof }: any) {
+  const regress = (cell: any) => ({
+    btc: cell?.lanes?.btc?.available ? cell.lanes.btc.operating_profit_month ?? 0 : null,
+    mining: cell?.lanes?.mining?.available ? cell.lanes.mining.operating_profit_month ?? 0 : null,
+    gpu: cell?.lanes?.gpu?.available ? cell.lanes.gpu.operating_profit_month ?? 0 : null,
+    energy: cell?.lanes?.energy?.available ? cell.lanes.energy.operating_profit_month ?? 0 : null,
+  })
+  return <>
+    <div className="panel mb-8">
+      <div className="panel-header"><span className="panel-title"><TrendingUp size={14} /> SecDB-style capital risk surface</span>
+        <button className="btn btn-sm" onClick={() => openProof(grid.receipt_id)}><Eye size={11} /> Proof</button></div>
+      <div className="grid-12">
+        <MiniMetric label="Mode" value={grid.mode} />
+        <MiniMetric label="Cells swept" value={grid.matrix?.cell_count ?? 0} />
+        <MiniMetric label="Grid spec" value={`${(grid.grid_spec || []).length} dims`} />
+        <MiniMetric label="Note" value="assumption-heavy by construction" />
+      </div>
+      <div className="table-wrap mt-8"><table className="table"><thead><tr>
+        <th>Dimension</th><th>Range</th><th>Steps</th><th>Sweep values</th>
+      </tr></thead><tbody>
+        {grid.grid_spec?.map((s: any) => <tr key={s.key}><td>{s.label}</td><td className="mono">{`${fmtNum(s.min, 3)}…${fmtNum(s.max, 3)}`}</td><td>{s.steps}</td>
+          <td className="mono">{s.values.map((v: number) => fmtNum(v, v < 1 ? 4 : 2)).join(' · ')}</td>
+        </tr>)}
+      </tbody></table></div>
+    </div>
+
+    <div className="grid-12 mb-8">
+      <div className="panel col-7"><div className="panel-header"><span className="panel-title"><Activity size={14} /> Sweep detail (tornado)</span><span className="badge badge-neutral">{grid.mode}</span></div>
+        <div className="table-wrap"><table className="table"><thead><tr>
+          <th>Dimension</th><th>Sweep value</th><th>Mining / mo</th><th>GPU / mo</th><th>Energy / mo</th><th>BTC / mo</th>
+        </tr></thead><tbody>
+          {grid.matrix?.cells?.map((c: any, i: number) => { const entry = Object.entries(c.vector || {})[0] || [null, null]
+            const dim = entry[0], v = entry[1]
+            return <tr key={i}><td className="mono">{dim}</td><td className="mono">{String(v)}</td>
+            <td className="mono">{fmtUsd(regress(c).mining)}</td><td className="mono">{fmtUsd(regress(c).gpu)}</td><td className="mono">{fmtUsd(regress(c).energy)}</td><td className="mono">{fmtUsd(regress(c).btc)}</td></tr> })}
+        </tbody></table></div>
+      </div>
+      <div className="panel col-5" style={{ borderColor: 'var(--amber)' }}><div className="panel-header"><span className="panel-title"><AlertTriangle size={14} /> Break-even crossings</span><span className="badge badge-amber">TORNADO</span></div>
+        {Object.entries(grid.matrix?.breakeven || {}).map(([dim, be]: any) => <div key={dim} className="flex-between mt-8" style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+          <div><div className="mono" style={{ fontSize: 12 }}>{be.top_lane ?? dim}</div>
+            <div className="muted" style={{ fontSize: 10 }}>{be.note}</div></div>
+          <div className="mono text-right">{be.breakeven_value != null ? fmtNum(be.breakeven_value, 2) : 'in range'}</div>
+        </div>)}
+        <p className="muted mt-8" style={{ fontSize: 10 }}>Each row sweeps one dimension from min→max while every other input stays at the base run. Negative roots = the shock itself flips the lane to loss (`operating_profit_month` wall-clock impossible).</p>
+      </div>
+    </div>
+    <p className="muted mb-8" style={{ fontSize: 10 }}>{grid.disclaimer}</p>
+  </>
 }
 
 function OptimizeView({ optimize, openProof }: any) {
