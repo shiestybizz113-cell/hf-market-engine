@@ -4,8 +4,7 @@ import httpx
 from fastapi import APIRouter, Depends
 
 from app.api.auth import get_current_user
-from app.core import ai, budget
-from app.core.config import settings
+from app.core.budget import spend_summary
 from app.core.database import get_db
 from app.core.plans import catalog_public
 from app.models.schemas import PlanInfo, SystemHealth
@@ -42,5 +41,23 @@ async def health(current_user=Depends(get_current_user)):
 
 @router.get("/system/plans", response_model=list[PlanInfo])
 async def plans():
+    """Public plan catalog (no auth required)."""
+    return catalog_public()
+
+
+@router.get("/system/spend")
+async def ai_spend(current_user=Depends(get_current_user)):
+    """
+    Rolling 24h AI spend against the enforced caps.
+
+    Computed from the signed receipt ledger — the same append-only record
+    an auditor reads. Spend evidence and spend enforcement cannot disagree,
+    because they are the same data.
+    """
+    return await spend_summary(get_db(), user_id=current_user["_id"])
+
+
+@router.get("/pricing/plans", response_model=list[PlanInfo])
+async def pricing_plans():
     """Public plan catalog (no auth required)."""
     return catalog_public()

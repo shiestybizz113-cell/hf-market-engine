@@ -1,7 +1,7 @@
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
@@ -26,9 +26,15 @@ from app.api import (
     trading,
 )
 from app.core.config import settings
-from app.core.database import close_mongo_connection, connect_to_mongo, get_db
+from app.core.database import close_mongo_connection, connect_to_mongo
 from app.core.infrastructure_data import close_infrastructure_cache
-from app.core.rate_limit import check_rate_limit, close_rate_limit_client
+from app.core.rate_limit import (
+    check_rate_limit,
+    close_rate_limit_client,
+    limiter,
+    rate_limit_handler,
+)
+from app.core.security_headers import SecurityHeadersMiddleware
 
 
 @asynccontextmanager
@@ -65,36 +71,76 @@ app.add_middleware(
 )
 
 # Rate limiting middleware (slowapi)
+app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
-@app.exception_handler(RateLimitExceeded)
-async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    return JSONResponse(
-        status_code=429,
-        content={"detail": "Rate limit exceeded"},
-    )
+@app.middleware("http")
+async def public_edge_controls(request: Request, call_next):
+    """Trace every request and enforce shared public rate limits."""
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    request.state.request_id = request_id
+
+    allowed, limit = await check_rate_limit(request)
+    if not allowed:
+        response = JSONResponse(
+            status_code=429,
+            content={
+                "detail": "Rate limit exceeded",
+                "request_id": request_id,
+                "retry_after_seconds": limit.get("window_seconds", 60),
+            },
+        )
+        response.headers["Retry-After"] = str(limit.get("window_seconds", 60))
+    else:
+        response = await call_next(request)
+
+    response.headers["X-Request-ID"] = request_id
+    if limit.get("limit") is not None:
+        response.headers["X-RateLimit-Limit"] = str(limit["limit"])
+        response.headers["X-RateLimit-Remaining"] = str(limit.get("remaining", 0))
+    if limit.get("degraded"):
+        response.headers["X-RateLimit-Degraded"] = "1"
+    return response
+
+
+app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
 
 
 # Routers
-app.include_router(auth.router)
-app.include_router(market.router)
-app.include_router(trading.router)
-app.include_router(system.router)
-app.include_router(execution.router)
-app.include_router(journal.router)
-app.include_router(billing.router)
-app.include_router(evidence.router)
-app.include_router(mining.router)
-app.include_router(decision.router)
-app.include_router(capital.router)
-app.include_router(assets.router)
-app.include_router(hardware.router)
-app.include_router(energy.router)
-app.include_router(compute.router)
-app.include_router(infrastructure.router)
+app.include_router(auth.router, prefix="/api")
+app.include_router(market.router, prefix="/api")
+app.include_router(trading.router, prefix="/api")
+app.include_router(system.router, prefix="/api")
+app.include_router(execution.router, prefix="/api")
+app.include_router(journal.router, prefix="/api")
+app.include_router(billing.router, prefix="/api")
+app.include_router(evidence.router, prefix="/api")
+app.include_router(mining.router, prefix="/api")
+app.include_router(decision.router, prefix="/api")
+app.include_router(capital.router, prefix="/api")
+app.include_router(assets.router, prefix="/api")
+app.include_router(hardware.router, prefix="/api")
+app.include_router(energy.router, prefix="/api")
+app.include_router(compute.router, prefix="/api")
+app.include_router(infrastructure.router, prefix="/api")
 
 
 @app.get("/")
 async def root():
-    return {"message": "hf-market-engine API"}
+    return {
+        "product": "hf-market-engine",
+        "tagline": "AI Trading Intelligence OS",
+        "phase": "1 – Research & Simulation",
+        "disclaimer": (
+            "This platform provides market research, simulation, and AI-assisted analysis. "
+            "It is not financial advice and does not guarantee profits. "
+            "Trading crypto, stocks, ETFs, forex and other assets involves substantial risk."
+        ),
+    }
+
+
+@app.get("/api/health")
+async def api_health():
+    return {"status": "ok", "service": settings.APP_NAME}
